@@ -1,0 +1,10 @@
+com/agentframework/tests/ObservabilityPerceptionTest.class
+com/agentframework/tests/FoundationTest.class
+com/agentframework/tests/SecurityTest.class
+com/agentframework/tests/ActionTest.class
+com/agentframework/tests/HitlTest.class
+com/agentframework/tests/RuntimeTest.class
+com/agentframework/tests/MemoryTest.class
+com/agentframework/tests/MultiAgentTest.class
+com/agentframework/tests/CoreTest.class
+com/agentframework/tests/ReasoningTest.class

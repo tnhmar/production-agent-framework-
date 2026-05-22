@@ -36,14 +36,23 @@ public class TieredMemory implements Memory {
             auditLog.record(auditEntry("REJECTED","",ctx,meta), ctx);
             return null;
         }
-        List<Double> emb = content.embedding() != null ? content.embedding() : embedFn.embed(content.text());
+        // m4 fix: compute importance score at write time via ImportanceScorer
+        EvaluationContext evalCtx = EvaluationContext.current();
         String id = UUID.randomUUID().toString();
-        MemoryRecord rec = new MemoryRecord(id, content, type, meta, meta.importanceScore(), 0);
+        // Bootstrap a provisional record to score (accessCount=0, score=meta.importanceScore())
+        MemoryRecord provisional = new MemoryRecord(id, content, type, meta, meta.importanceScore(), 0);
+        double computedImportance = scorer.score(provisional, evalCtx);
+        // Rebuild metadata with the computed importance so downstream retrieval ranking is accurate
+        MemoryMetadata scoredMeta = new MemoryMetadata(
+            computedImportance, meta.createdAt(), meta.source(), meta.tags());
+        MemoryRecord rec = new MemoryRecord(id, content, type, scoredMeta, computedImportance, 0);
+
+        List<Double> emb = content.embedding() != null ? content.embedding() : embedFn.embed(content.text());
         hotVec.insert(id, emb, content.text(), ctx);
         hotRel.insert(rec, ctx);
         if (type == MemoryType.SEMANTIC || type == MemoryType.EPISODIC)
             extractor.extract(content.text(), meta.source()).forEach(t -> kg.upsert(t, ctx));
-        auditLog.record(auditEntry("WRITE", id, ctx, meta), ctx);
+        auditLog.record(auditEntry("WRITE", id, ctx, scoredMeta), ctx);
         return id;
     }
 

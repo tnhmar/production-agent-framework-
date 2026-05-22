@@ -29,8 +29,15 @@ class StateMachineRunner {
         switch (ctx.currentState()) {
 
             case INITIALIZED -> {
+                // m6 fix: root goal carries the task's actual budget, not unlimited
+                Task t = ctx.task();
+                Budget taskBudget = new Budget(
+                    t.maxCycles(),
+                    t.maxTokens(),
+                    t.maxWallClockTime() != null ? t.maxWallClockTime() : java.time.Duration.ofHours(24),
+                    t.budgetLimit() != null ? t.budgetLimit() : java.math.BigDecimal.valueOf(Long.MAX_VALUE));
                 ctx.goalStack().push(new Goal("root", null, GoalStatus.PENDING,
-                    ctx.task().instruction(), java.util.List.of(), Budget.unlimited()));
+                    t.instruction(), java.util.List.of(), taskBudget));
                 ctx.transitionTo(RunState.VALIDATING);
             }
 
@@ -92,9 +99,14 @@ class StateMachineRunner {
             }
 
             case SUSPENDED_HITL, WAITING_FOR_JOB -> {
-                // Sync runtime cannot handle async wait states
+                // C2: These are async-only wait states.
+                // The synchronous AgentRuntime cannot suspend and resume — it aborts here.
+                // EXTENSION POINT: implement an async runtime that overrides this class,
+                // persists the ExecutionContext.Snapshot via ExecutionStore, publishes the
+                // ApprovalPacket, and resumes execution on ApprovalDecision callback.
                 ctx.setTerminationReason(new TerminationReason.FailureEscalation(
-                    "State " + ctx.currentState() + " requires async runtime"));
+                    "State " + ctx.currentState() + " requires an async runtime. " +
+                    "Implement an async AgentRuntime that handles SUSPENDED_HITL via ExecutionStore."));
                 ctx.transitionTo(RunState.ABORTED);
             }
 

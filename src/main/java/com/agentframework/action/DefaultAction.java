@@ -24,8 +24,8 @@ public class DefaultAction implements Action {
         return new DefaultAction(registry,
             List.of(new SchemaActionValidator(),
                     new SemanticActionValidator(),
+                    new SafetyActionValidator(),    // IC2 fix: approval gate before policy hard-fail
                     securityEnforcer,
-                    new SafetyActionValidator(),
                     new TaintActionValidator()),
             middleware, dispatcher);
     }

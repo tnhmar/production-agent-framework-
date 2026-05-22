@@ -1,8 +1,10 @@
 package com.agentframework.core;
+
 import com.agentframework.foundation.*;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
+
 public interface ExecutionContext {
     String         runId();
     String         tenantId();
@@ -47,5 +49,24 @@ public interface ExecutionContext {
     void setTerminationReason(TerminationReason r);
 
     Snapshot checkpoint();
-    interface Snapshot { String runId(); RunState state(); int cycle(); }
+
+    /**
+     * Full, schema-versioned checkpoint snapshot (C1 fix).
+     * Contains all state required for deterministic resume:
+     * run ID, step index, state, goal stack, working memory entries,
+     * beliefs, token/cost accumulators, and a SHA-256 integrity hash.
+     */
+    interface Snapshot {
+        String                   runId();
+        RunState                 state();
+        int                      cycle();
+        // Extended fields for full checkpoint conformance
+        String                   schemaVersion();
+        List<Goal>               goalStackSnapshot();
+        List<WorkingMemoryEntry> workingMemorySnapshot();
+        List<Belief>             beliefSnapshot();
+        int                      totalTokens();
+        BigDecimal               totalCost();
+        String                   integrityHash();   // SHA-256 of canonical JSON
+    }
 }

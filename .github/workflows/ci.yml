@@ -1,0 +1,35 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Compile main sources
+        run: |
+          mkdir -p out/main
+          java Compile.java src/main/java out/main
+
+      - name: Compile test sources
+        run: |
+          mkdir -p out/test
+          java Compile.java src/test/java out/test out/main
+
+      - name: Run tests
+        run: |
+          java -cp out/main:out/test com.agentframework.AllTests

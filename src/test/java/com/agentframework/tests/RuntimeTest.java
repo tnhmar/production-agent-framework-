@@ -1,4 +1,6 @@
 package com.agentframework.tests;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 import com.agentframework.action.*;
 import com.agentframework.action.middleware.*;
 import com.agentframework.core.*;
@@ -9,7 +11,6 @@ import com.agentframework.perception.*;
 import com.agentframework.rag.RagService;
 import com.agentframework.reasoning.*;
 import com.agentframework.reasoning.strategy.ReActStrategy;
-import com.agentframework.testutil.Assert;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -34,16 +35,18 @@ public class RuntimeTest {
         return new AgentRuntime(new PassThroughPlanValidator());
     }
 
+    @Test
     public void testImmediateFinalAnswer() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         Agent agent = agentWith(StubLLMProvider.finalAnswer("42"), reg);
         Task task = Task.builder().instruction("What is 6*7?").maxCycles(5).build();
         ExecutionResult r = runtime().execute(agent, task);
-        Assert.assertTrue(r.succeeded(), "run succeeded");
-        Assert.assertEquals("42", r.finalAnswer(), "final answer");
-        Assert.assertEquals(RunState.COMPLETED, r.finalState(), "COMPLETED");
+        assertTrue(r.succeeded(), "run succeeded");
+        assertEquals("42", r.finalAnswer(), "final answer");
+        assertEquals(RunState.COMPLETED, r.finalState(), "COMPLETED");
     }
 
+    @Test
     public void testSingleToolThenAnswer() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("calc","1.0","compute math"),
@@ -59,11 +62,12 @@ public class RuntimeTest {
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("compute 6*7").maxCycles(10).build();
         ExecutionResult r = runtime().execute(agent, task);
-        Assert.assertTrue(r.succeeded(), "succeeded after tool call");
-        Assert.assertEquals(2, call[0], "LLM called twice");
-        Assert.assertTrue(r.cycleRecords().size() >= 2, "at least 2 cycles");
+        assertTrue(r.succeeded(), "succeeded after tool call");
+        assertEquals(2, call[0], "LLM called twice");
+        assertTrue(r.cycleRecords().size() >= 2, "at least 2 cycles");
     }
 
+    @Test
     public void testMaxCyclesTermination() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         // LLM always wants to call a tool but tool keeps running
@@ -72,18 +76,20 @@ public class RuntimeTest {
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("loop forever").maxCycles(3).build();
         ExecutionResult r = runtime().execute(agent, task);
-        Assert.assertFalse(r.succeeded(), "not succeeded (resource limit)");
-        Assert.assertTrue(r.terminationReason() instanceof TerminationReason.ResourceLimit, "resource limit");
+        assertFalse(r.succeeded(), "not succeeded (resource limit)");
+        assertTrue(r.terminationReason() instanceof TerminationReason.ResourceLimit, "resource limit");
     }
 
+    @Test
     public void testEscalationTerminates() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         Agent agent = agentWith(StubLLMProvider.escalate("too complex"), reg);
         Task task = Task.builder().instruction("do impossible thing").maxCycles(5).build();
         ExecutionResult r = runtime().execute(agent, task);
-        Assert.assertTrue(r.terminationReason() instanceof TerminationReason.Escalated, "escalated");
+        assertTrue(r.terminationReason() instanceof TerminationReason.Escalated, "escalated");
     }
 
+    @Test
     public void testConsecutiveFailuresTerminate() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         // Register tool that always throws
@@ -93,13 +99,14 @@ public class RuntimeTest {
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("fail 3 times").maxCycles(10).build();
         ExecutionResult r = runtime().execute(agent, task);
-        Assert.assertFalse(r.succeeded(), "not succeeded after failures");
-        Assert.assertTrue(
+        assertFalse(r.succeeded(), "not succeeded after failures");
+        assertTrue(
             r.terminationReason() instanceof TerminationReason.FailureEscalation ||
             r.terminationReason() instanceof TerminationReason.ResourceLimit,
             "failure or resource limit");
     }
 
+    @Test
     public void testMultipleCyclesRecorded() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("step","1.0","step"), (a,c) -> ToolResult.ok("done"));
@@ -113,10 +120,11 @@ public class RuntimeTest {
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("multi step").maxCycles(10).build();
         ExecutionResult r = runtime().execute(agent, task);
-        Assert.assertTrue(r.succeeded(), "multi-step succeeded");
-        Assert.assertTrue(r.cycleRecords().size() >= 3, ">=3 cycles recorded");
+        assertTrue(r.succeeded(), "multi-step succeeded");
+        assertTrue(r.cycleRecords().size() >= 3, ">=3 cycles recorded");
     }
 
+    @Test
     public void testObservabilityEvents() {
         InMemoryEventSink sink = new InMemoryEventSink();
         AgentRuntime rt = new AgentRuntime(new PassThroughPlanValidator(), sink);
@@ -124,21 +132,23 @@ public class RuntimeTest {
         Agent agent = agentWith(StubLLMProvider.finalAnswer("done"), reg);
         Task task = Task.builder().instruction("test").maxCycles(5).build();
         rt.execute(agent, task);
-        Assert.assertTrue(sink.count(AgentEvent.EventType.RUN_STARTED) >= 1, "RUN_STARTED emitted");
-        Assert.assertTrue(sink.count(AgentEvent.EventType.RUN_COMPLETED) >= 1, "RUN_COMPLETED emitted");
-        Assert.assertTrue(sink.count(AgentEvent.EventType.CYCLE_STARTED) >= 1, "CYCLE_STARTED emitted");
+        assertTrue(sink.count(AgentEvent.EventType.RUN_STARTED) >= 1, "RUN_STARTED emitted");
+        assertTrue(sink.count(AgentEvent.EventType.RUN_COMPLETED) >= 1, "RUN_COMPLETED emitted");
+        assertTrue(sink.count(AgentEvent.EventType.CYCLE_STARTED) >= 1, "CYCLE_STARTED emitted");
     }
 
+    @Test
     public void testAsyncExecution() throws Exception {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         Agent agent = agentWith(StubLLMProvider.finalAnswer("async done"), reg);
         Task task = Task.builder().instruction("async test").maxCycles(5).build();
         CompletableFuture<ExecutionResult> future = runtime().executeAsync(agent, task);
         ExecutionResult r = future.get(5, TimeUnit.SECONDS);
-        Assert.assertTrue(r.succeeded(), "async succeeded");
-        Assert.assertEquals("async done", r.finalAnswer(), "async answer");
+        assertTrue(r.succeeded(), "async succeeded");
+        assertEquals("async done", r.finalAnswer(), "async answer");
     }
 
+    @Test
     public void testTenantIsolation() {
         InMemoryEventSink sink = new InMemoryEventSink();
         AgentRuntime rt = new AgentRuntime(new PassThroughPlanValidator(), sink);
@@ -147,10 +157,10 @@ public class RuntimeTest {
         Task task = Task.builder().instruction("tenant test").maxCycles(5).build();
         ExecutionResult r1 = rt.execute(agent, task, "tenant-A", "user1");
         ExecutionResult r2 = rt.execute(agent, task, "tenant-B", "user2");
-        Assert.assertTrue(r1.succeeded(), "tenant-A succeeded");
-        Assert.assertTrue(r2.succeeded(), "tenant-B succeeded");
+        assertTrue(r1.succeeded(), "tenant-A succeeded");
+        assertTrue(r2.succeeded(), "tenant-B succeeded");
         // verify run IDs are distinct
-        Assert.assertFalse(
+        assertFalse(
             r1.cycleRecords().isEmpty() && r2.cycleRecords().isEmpty(),
             "both ran");
     }

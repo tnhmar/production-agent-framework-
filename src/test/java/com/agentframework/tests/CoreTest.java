@@ -1,7 +1,8 @@
 package com.agentframework.tests;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
-import com.agentframework.testutil.Assert;
 import java.math.BigDecimal;
 import java.time.Instant;
 public class CoreTest {
@@ -11,155 +12,172 @@ public class CoreTest {
         return new DefaultExecutionContext(t, "tenant1", "user1");
     }
 
+    @Test
     public void testExecutionContextDefaults() {
         DefaultExecutionContext c = ctx();
-        Assert.assertNotNull(c.runId(), "runId not null");
-        Assert.assertEquals("tenant1", c.tenantId(), "tenantId");
-        Assert.assertEquals(RunState.INITIALIZED, c.currentState(), "initial state");
-        Assert.assertEquals(0, c.cycleCount(), "initial cycle");
-        Assert.assertEquals(BigDecimal.ZERO, c.totalCost(), "initial cost");
+        assertNotNull(c.runId(), "runId not null");
+        assertEquals("tenant1", c.tenantId(), "tenantId");
+        assertEquals(RunState.INITIALIZED, c.currentState(), "initial state");
+        assertEquals(0, c.cycleCount(), "initial cycle");
+        assertEquals(BigDecimal.ZERO, c.totalCost(), "initial cost");
     }
 
+    @Test
     public void testStateTransitions() {
         DefaultExecutionContext c = ctx();
         c.transitionTo(RunState.PLANNING);
-        Assert.assertEquals(RunState.PLANNING, c.currentState(), "planning");
+        assertEquals(RunState.PLANNING, c.currentState(), "planning");
         c.transitionTo(RunState.COMPLETED);
-        Assert.assertTrue(c.currentState().isTerminal(), "terminal");
+        assertTrue(c.currentState().isTerminal(), "terminal");
     }
 
+    @Test
     public void testCycleAndToken() {
         DefaultExecutionContext c = ctx();
         c.incrementCycle(); c.incrementCycle();
-        Assert.assertEquals(2, c.cycleCount(), "2 cycles");
+        assertEquals(2, c.cycleCount(), "2 cycles");
         c.addTokens(1000); c.addTokens(500);
-        Assert.assertEquals(1500, c.totalTokensUsed(), "1500 tokens");
+        assertEquals(1500, c.totalTokensUsed(), "1500 tokens");
         c.addCost(BigDecimal.valueOf(5));
-        Assert.assertEquals(BigDecimal.valueOf(5), c.totalCost(), "cost 5");
+        assertEquals(BigDecimal.valueOf(5), c.totalCost(), "cost 5");
     }
 
+    @Test
     public void testConsecutiveFailures() {
         DefaultExecutionContext c = ctx();
         c.incrementConsecutiveFailures();
         c.incrementConsecutiveFailures();
-        Assert.assertEquals(2, c.consecutiveFailures(), "2 failures");
+        assertEquals(2, c.consecutiveFailures(), "2 failures");
         c.resetConsecutiveFailures();
-        Assert.assertEquals(0, c.consecutiveFailures(), "reset failures");
+        assertEquals(0, c.consecutiveFailures(), "reset failures");
     }
 
+    @Test
     public void testRevisionBudget() {
         DefaultExecutionContext c = ctx();
         c.incrementRevisionCount(); c.incrementRevisionCount(); c.incrementRevisionCount();
-        Assert.assertFalse(c.isRevisionBudgetExceeded(3), "3 revisions not exceeded with max=3");
+        assertFalse(c.isRevisionBudgetExceeded(3), "3 revisions not exceeded with max=3");
         c.incrementRevisionCount();
-        Assert.assertTrue(c.isRevisionBudgetExceeded(3), "4 revisions exceeds max=3");
+        assertTrue(c.isRevisionBudgetExceeded(3), "4 revisions exceeds max=3");
     }
 
+    @Test
     public void testPlanStale() {
         DefaultExecutionContext c = ctx();
-        Assert.assertFalse(c.isPlanStale(), "initially not stale");
+        assertFalse(c.isPlanStale(), "initially not stale");
         c.flagPlanStale("world changed");
-        Assert.assertTrue(c.isPlanStale(), "stale after flag");
-        Assert.assertEquals("world changed", c.stalenessHint(), "hint");
+        assertTrue(c.isPlanStale(), "stale after flag");
+        assertEquals("world changed", c.stalenessHint(), "hint");
         c.flagPlanStale(null);
-        Assert.assertFalse(c.isPlanStale(), "cleared");
+        assertFalse(c.isPlanStale(), "cleared");
     }
 
+    @Test
     public void testCheckpoint() {
         DefaultExecutionContext c = ctx();
         c.transitionTo(RunState.PLANNING); c.incrementCycle();
         ExecutionContext.Snapshot snap = c.checkpoint();
-        Assert.assertEquals(c.runId(), snap.runId(), "snapshot runId");
-        Assert.assertEquals(RunState.PLANNING, snap.state(), "snapshot state");
-        Assert.assertEquals(1, snap.cycle(), "snapshot cycle");
+        assertEquals(c.runId(), snap.runId(), "snapshot runId");
+        assertEquals(RunState.PLANNING, snap.state(), "snapshot state");
+        assertEquals(1, snap.cycle(), "snapshot cycle");
     }
 
     // ── GoalStack ─────────────────────────────────────────────
+    @Test
     public void testGoalStackPushAndCurrent() {
         DefaultGoalStack gs = new DefaultGoalStack();
-        Assert.assertFalse(gs.current().isPresent(), "empty");
+        assertFalse(gs.current().isPresent(), "empty");
         Goal g = new Goal("root", null, GoalStatus.PENDING, "do X", java.util.List.of(), Budget.unlimited());
         gs.push(g);
-        Assert.assertTrue(gs.current().isPresent(), "has current");
-        Assert.assertEquals("root", gs.current().get().id(), "current id");
+        assertTrue(gs.current().isPresent(), "has current");
+        assertEquals("root", gs.current().get().id(), "current id");
     }
 
+    @Test
     public void testGoalStackStatusUpdate() {
         DefaultGoalStack gs = new DefaultGoalStack();
         Goal g = new Goal("root", null, GoalStatus.PENDING, "do X", java.util.List.of(), Budget.unlimited());
         gs.push(g);
         gs.updateStatus("root", GoalStatus.COMPLETED);
-        Assert.assertEquals(GoalStatus.COMPLETED, gs.current().get().status(), "status updated");
-        Assert.assertTrue(gs.isRootAchieved(), "root achieved");
+        assertEquals(GoalStatus.COMPLETED, gs.current().get().status(), "status updated");
+        assertTrue(gs.isRootAchieved(), "root achieved");
     }
 
+    @Test
     public void testGoalStackDepth() {
         DefaultGoalStack gs = new DefaultGoalStack();
         for (int i=0;i<3;i++) gs.push(new Goal("g"+i, null, GoalStatus.PENDING, "d"+i, java.util.List.of(), null));
-        Assert.assertEquals(3, gs.depth(), "depth 3");
+        assertEquals(3, gs.depth(), "depth 3");
         gs.pop();
-        Assert.assertEquals(2, gs.depth(), "depth 2 after pop");
+        assertEquals(2, gs.depth(), "depth 2 after pop");
     }
 
     // ── BeliefState ───────────────────────────────────────────
+    @Test
     public void testBeliefAssertAndRetrieve() {
         DefaultBeliefState bs = new DefaultBeliefState();
         Belief b = new Belief("b1", "sky", "color", "blue", 0.9, "observation", Instant.now(), false);
         bs.assertBelief(b);
-        Assert.assertEquals(1, bs.size(), "size 1");
-        Assert.assertTrue(bs.getBySPO("sky", "color").isPresent(), "found");
-        Assert.assertEquals("blue", bs.getBySPO("sky","color").get().object(), "object");
+        assertEquals(1, bs.size(), "size 1");
+        assertTrue(bs.getBySPO("sky", "color").isPresent(), "found");
+        assertEquals("blue", bs.getBySPO("sky","color").get().object(), "object");
     }
 
+    @Test
     public void testBeliefConflictDetection() {
         DefaultBeliefState bs = new DefaultBeliefState();
         Belief b1 = new Belief("b1","sky","color","blue",  0.7,"obs1", Instant.now(),false);
         Belief b2 = new Belief("b2","sky","color","green", 0.9,"obs2", Instant.now(),false);
         bs.assertBelief(b1);
         bs.assertBelief(b2); // higher confidence, should win
-        Assert.assertEquals(1, bs.conflicts().size(), "conflict recorded");
-        Assert.assertEquals("green", bs.getBySPO("sky","color").get().object(), "higher conf wins");
+        assertEquals(1, bs.conflicts().size(), "conflict recorded");
+        assertEquals("green", bs.getBySPO("sky","color").get().object(), "higher conf wins");
     }
 
+    @Test
     public void testBeliefRetract() {
         DefaultBeliefState bs = new DefaultBeliefState();
         Belief b = new Belief("b1","sky","color","blue", 0.9,"obs", Instant.now(),false);
         bs.assertBelief(b);
         bs.retract("b1");
-        Assert.assertEquals(0, bs.size(), "empty after retract");
+        assertEquals(0, bs.size(), "empty after retract");
     }
 
+    @Test
     public void testBeliefSameValueNoConflict() {
         DefaultBeliefState bs = new DefaultBeliefState();
         Belief b1 = new Belief("b1","sky","color","blue",0.7,"obs1",Instant.now(),false);
         Belief b2 = new Belief("b2","sky","color","blue",0.9,"obs2",Instant.now(),false);
         bs.assertBelief(b1); bs.assertBelief(b2);
-        Assert.assertEquals(0, bs.conflicts().size(), "no conflict for same value");
+        assertEquals(0, bs.conflicts().size(), "no conflict for same value");
     }
 
     // ── WorkingMemory ─────────────────────────────────────────
+    @Test
     public void testWorkingMemoryAddAndGet() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
         WorkingMemoryEntry e = new WorkingMemoryEntry("e1","hello",WorkingMemoryTier.ACTIVE,
             com.agentframework.foundation.Origin.USER,1.0,Instant.now(),
             com.agentframework.foundation.TaintLabel.CLEAN);
         wm.add(e);
-        Assert.assertEquals(1, wm.size(), "size 1");
-        Assert.assertEquals(1, wm.getAll().size(), "getAll size 1");
+        assertEquals(1, wm.size(), "size 1");
+        assertEquals(1, wm.getAll().size(), "getAll size 1");
     }
 
+    @Test
     public void testWorkingMemoryMarkProcessed() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
         WorkingMemoryEntry e = new WorkingMemoryEntry("e1","hello",WorkingMemoryTier.ACTIVE,
             com.agentframework.foundation.Origin.USER,1.0,Instant.now(),
             com.agentframework.foundation.TaintLabel.CLEAN);
         wm.add(e);
-        Assert.assertEquals(1, wm.getUnprocessed().size(), "1 unprocessed");
+        assertEquals(1, wm.getUnprocessed().size(), "1 unprocessed");
         wm.markProcessed("e1");
-        Assert.assertEquals(0, wm.getUnprocessed().size(), "0 unprocessed after mark");
-        Assert.assertTrue(wm.isProcessed("e1"), "isProcessed");
+        assertEquals(0, wm.getUnprocessed().size(), "0 unprocessed after mark");
+        assertTrue(wm.isProcessed("e1"), "isProcessed");
     }
 
+    @Test
     public void testWorkingMemoryEvict() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
         for (int i=0;i<5;i++) {
@@ -170,9 +188,10 @@ public class CoreTest {
             wm.add(e);
         }
         wm.evictOldest(2);
-        Assert.assertEquals(3, wm.size(), "3 remain after evicting 2");
+        assertEquals(3, wm.size(), "3 remain after evicting 2");
     }
 
+    @Test
     public void testWorkingMemoryCompress() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
         for (int i=0;i<3;i++) {
@@ -181,8 +200,8 @@ public class CoreTest {
                 com.agentframework.foundation.TaintLabel.CLEAN));
         }
         wm.compress(java.util.List.of("e0","e1","e2"), "compressed summary");
-        Assert.assertEquals(1, wm.size(), "compressed to 1");
-        Assert.assertEquals("compressed summary", wm.getAll().get(0).content(), "summary");
-        Assert.assertEquals(WorkingMemoryTier.COMPRESSED, wm.getAll().get(0).tier(), "COMPRESSED tier");
+        assertEquals(1, wm.size(), "compressed to 1");
+        assertEquals("compressed summary", wm.getAll().get(0).content(), "summary");
+        assertEquals(WorkingMemoryTier.COMPRESSED, wm.getAll().get(0).tier(), "COMPRESSED tier");
     }
 }

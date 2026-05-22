@@ -1,9 +1,10 @@
 package com.agentframework.tests;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 import com.agentframework.action.*;
 import com.agentframework.action.middleware.*;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
-import com.agentframework.testutil.Assert;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.*;
@@ -19,6 +20,7 @@ public class ActionTest {
         return r;
     }
 
+    @Test
     public void testSimpleToolCallSuccess() {
         SimpleToolRegistry reg = registryWith("echo",
             (args, ctx) -> ToolResult.ok(args.get("text")));
@@ -27,36 +29,40 @@ public class ActionTest {
         DefaultExecutionContext ctx = ctx();
         Decision d = new ToolCall("echo", Map.of("text","hello"), "test");
         ActionResult r = action.execute(d, ctx);
-        Assert.assertTrue(r.isSuccess(), "echo success");
-        Assert.assertEquals("hello", ((ActionResult.Success)r).result().data(), "echo data");
+        assertTrue(r.isSuccess(), "echo success");
+        assertEquals("hello", ((ActionResult.Success)r).result().data(), "echo data");
     }
 
+    @Test
     public void testUnknownToolReturnsFailure() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         DefaultAction action = new DefaultAction(reg, List.of(), ToolMiddleware.identity(),
             new DefaultToolDispatcher(reg));
         ActionResult r = action.execute(new ToolCall("unknown", Map.of(), ""), ctx());
-        Assert.assertFalse(r.isSuccess(), "unknown tool fails");
-        Assert.assertEquals("UNKNOWN_TOOL", ((ActionResult.Failure)r).errorCode(), "error code");
+        assertFalse(r.isSuccess(), "unknown tool fails");
+        assertEquals("UNKNOWN_TOOL", ((ActionResult.Failure)r).errorCode(), "error code");
     }
 
+    @Test
     public void testFinalAnswerReturnSuccess() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         DefaultAction action = new DefaultAction(reg, List.of(), ToolMiddleware.identity(),
             new DefaultToolDispatcher(reg));
         ActionResult r = action.execute(new FinalAnswer("done", List.of()), ctx());
-        Assert.assertTrue(r.isSuccess(), "FinalAnswer success");
+        assertTrue(r.isSuccess(), "FinalAnswer success");
     }
 
+    @Test
     public void testEscalateReturnsFailure() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         DefaultAction action = new DefaultAction(reg, List.of(), ToolMiddleware.identity(),
             new DefaultToolDispatcher(reg));
         ActionResult r = action.execute(new Escalate("too hard","HIGH"), ctx());
-        Assert.assertFalse(r.isSuccess(), "Escalate not success");
-        Assert.assertEquals("ESCALATED", ((ActionResult.Failure)r).errorCode(), "ESCALATED code");
+        assertFalse(r.isSuccess(), "Escalate not success");
+        assertEquals("ESCALATED", ((ActionResult.Failure)r).errorCode(), "ESCALATED code");
     }
 
+    @Test
     public void testSafetyValidatorBlocksIrreversible() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         // Register IRREVERSIBLE tool
@@ -70,10 +76,11 @@ public class ActionTest {
             List.of(new SafetyActionValidator()), ToolMiddleware.identity(),
             new DefaultToolDispatcher(reg));
         ActionResult r = action.execute(new ToolCall("nuke", Map.of(),""), ctx());
-        Assert.assertFalse(r.isSuccess(), "irreversible blocked by safety");
-        Assert.assertTrue(r instanceof ActionResult.ValidationFailure, "ValidationFailure");
+        assertFalse(r.isSuccess(), "irreversible blocked by safety");
+        assertTrue(r instanceof ActionResult.ValidationFailure, "ValidationFailure");
     }
 
+    @Test
     public void testTaintValidatorBlocksHostile() {
         SimpleToolRegistry reg = registryWith("search",
             (args, ctx) -> ToolResult.ok("results"));
@@ -86,9 +93,10 @@ public class ActionTest {
             WorkingMemoryTier.ACTIVE, Origin.RETRIEVAL, 0.1,
             java.time.Instant.now(), TaintLabel.HOSTILE));
         ActionResult r = action.execute(new ToolCall("search", Map.of("q","test"),""), ctx);
-        Assert.assertFalse(r.isSuccess(), "hostile taint blocks tool");
+        assertFalse(r.isSuccess(), "hostile taint blocks tool");
     }
 
+    @Test
     public void testLoggingMiddlewarePassThrough() {
         SimpleToolRegistry reg = registryWith("ping",
             (args, ctx) -> ToolResult.ok("pong"));
@@ -96,9 +104,10 @@ public class ActionTest {
             ToolMiddleware.chain(new LoggingMiddleware()),
             new DefaultToolDispatcher(reg));
         ActionResult r = action.execute(new ToolCall("ping", Map.of(),""), ctx());
-        Assert.assertTrue(r.isSuccess(), "logging middleware passes through");
+        assertTrue(r.isSuccess(), "logging middleware passes through");
     }
 
+    @Test
     public void testCircuitBreakerOpensAfterFailures() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         int[] calls = {0};
@@ -109,12 +118,13 @@ public class ActionTest {
             ToolMiddleware.chain(cb), new DefaultToolDispatcher(reg));
         DefaultExecutionContext ctx = ctx();
         for (int i=0;i<2;i++) action.execute(new ToolCall("flaky", Map.of(),""), ctx);
-        Assert.assertTrue(cb.isOpen(), "circuit open after 2 failures");
+        assertTrue(cb.isOpen(), "circuit open after 2 failures");
         // 3rd call should throw circuit-open RuntimeException
         ActionResult r = action.execute(new ToolCall("flaky", Map.of(),""), ctx);
-        Assert.assertFalse(r.isSuccess(), "circuit open blocks call");
+        assertFalse(r.isSuccess(), "circuit open blocks call");
     }
 
+    @Test
     public void testCachingMiddlewareReturnsCache() {
         int[] calls = {0};
         SimpleToolRegistry reg = registryWith("lookup",
@@ -125,11 +135,12 @@ public class ActionTest {
         DefaultExecutionContext ctx = ctx();
         ActionResult r1 = action.execute(new ToolCall("lookup", Map.of("k","x"),""), ctx);
         ActionResult r2 = action.execute(new ToolCall("lookup", Map.of("k","x"),""), ctx);
-        Assert.assertEquals(1, calls[0], "handler called once (cached)");
-        Assert.assertEquals(((ActionResult.Success)r1).result().data(),
+        assertEquals(1, calls[0], "handler called once (cached)");
+        assertEquals(((ActionResult.Success)r1).result().data(),
                              ((ActionResult.Success)r2).result().data(), "same cached result");
     }
 
+    @Test
     public void testParallelToolCalls() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("a","1.0","tool a"), (args,ctx) -> ToolResult.ok("A"));
@@ -140,12 +151,13 @@ public class ActionTest {
             List.of(new ToolCall("a",Map.of(),""), new ToolCall("b",Map.of(),"")),
             true, Duration.ofSeconds(5));
         ActionResult r = action.execute(p, ctx());
-        Assert.assertTrue(r instanceof ActionResult.PartialSuccess, "parallel result");
+        assertTrue(r instanceof ActionResult.PartialSuccess, "parallel result");
         ActionResult.PartialSuccess ps = (ActionResult.PartialSuccess)r;
-        Assert.assertEquals(2, ps.results().size(), "2 results");
-        Assert.assertEquals(0, ps.errors().size(), "0 errors");
+        assertEquals(2, ps.results().size(), "2 results");
+        assertEquals(0, ps.errors().size(), "0 errors");
     }
 
+    @Test
     public void testRetryMiddlewareRetriesOnFailure() {
         int[] attempts = {0};
         SimpleToolRegistry reg = registryWith("unstable", (args,ctx) -> {
@@ -157,17 +169,18 @@ public class ActionTest {
         DefaultAction action = new DefaultAction(reg, List.of(),
             ToolMiddleware.chain(retry), new DefaultToolDispatcher(reg));
         ActionResult r = action.execute(new ToolCall("unstable", Map.of(),""), ctx());
-        Assert.assertTrue(r.isSuccess(), "succeeds on 3rd attempt");
-        Assert.assertEquals(3, attempts[0], "3 attempts made");
+        assertTrue(r.isSuccess(), "succeeds on 3rd attempt");
+        assertEquals(3, attempts[0], "3 attempts made");
     }
 
+    @Test
     public void testToolRegistry_topK() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("web-search","1.0","search the web for information"), (a,c)->null);
         reg.register(ToolContract.readOnly("calculator","1.0","calculate arithmetic expressions"), (a,c)->null);
         reg.register(ToolContract.readOnly("file-read","1.0","read a file from disk"), (a,c)->null);
         List<ToolContract> top = reg.topK("search web", 2);
-        Assert.assertEquals(2, top.size(), "topK returns 2");
-        Assert.assertEquals("web-search", top.get(0).name(), "web-search is most relevant");
+        assertEquals(2, top.size(), "topK returns 2");
+        assertEquals("web-search", top.get(0).name(), "web-search is most relevant");
     }
 }

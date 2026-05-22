@@ -1,9 +1,10 @@
 package com.agentframework.tests;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 import com.agentframework.action.*;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
 import com.agentframework.security.*;
-import com.agentframework.testutil.Assert;
 import java.util.Set;
 public class SecurityTest {
 
@@ -11,46 +12,53 @@ public class SecurityTest {
         return new DefaultExecutionContext(Task.builder().instruction("x").build(), tenant, "u1");
     }
 
+    @Test
     public void testTaintTrackerPropagation() {
         TaintTracker tracker = new TaintTracker();
         tracker.label("src1", TaintLabel.EXTERNAL);
         tracker.label("src2", TaintLabel.HOSTILE);
         tracker.propagate("derived", java.util.List.of("src1","src2"));
-        Assert.assertEquals(TaintLabel.HOSTILE, tracker.get("derived"), "hostile propagates");
+        assertEquals(TaintLabel.HOSTILE, tracker.get("derived"), "hostile propagates");
     }
 
+    @Test
     public void testTaintTrackerClean() {
         TaintTracker tracker = new TaintTracker();
-        Assert.assertEquals(TaintLabel.CLEAN, tracker.get("unknown"), "unknown defaults CLEAN");
+        assertEquals(TaintLabel.CLEAN, tracker.get("unknown"), "unknown defaults CLEAN");
     }
 
+    @Test
     public void testTrustBoundaryPermits() {
         TrustBoundary b = new TrustBoundary("internal", TrustTier.HIGH, Set.of());
-        Assert.assertTrue(b.permits(TrustTier.HIGH, "any"), "HIGH permitted");
-        Assert.assertFalse(b.permits(TrustTier.MEDIUM, "any"), "MEDIUM rejected for HIGH boundary");
+        assertTrue(b.permits(TrustTier.HIGH, "any"), "HIGH permitted");
+        assertFalse(b.permits(TrustTier.MEDIUM, "any"), "MEDIUM rejected for HIGH boundary");
     }
 
+    @Test
     public void testTrustBoundaryOriginFilter() {
         TrustBoundary b = new TrustBoundary("restricted", TrustTier.MEDIUM, Set.of("internal","db"));
-        Assert.assertTrue(b.permits(TrustTier.HIGH, "internal"), "internal allowed");
-        Assert.assertFalse(b.permits(TrustTier.HIGH, "external"), "external blocked");
+        assertTrue(b.permits(TrustTier.HIGH, "internal"), "internal allowed");
+        assertFalse(b.permits(TrustTier.HIGH, "external"), "external blocked");
     }
 
+    @Test
     public void testTenantPolicyToolAllowed() {
         TenantPolicy p = TenantPolicy.restricted("t1", Set.of("search","calc"));
-        Assert.assertTrue(p.toolAllowed("search"), "search allowed");
-        Assert.assertFalse(p.toolAllowed("delete"), "delete blocked");
+        assertTrue(p.toolAllowed("search"), "search allowed");
+        assertFalse(p.toolAllowed("delete"), "delete blocked");
     }
 
+    @Test
     public void testTenantPolicyEngine() {
         TenantPolicyEngine engine = new TenantPolicyEngine();
         engine.register(TenantPolicy.restricted("t1", Set.of("search")));
         ValidationVerdict ok  = engine.check("t1", new ToolCall("search", java.util.Map.of(),""));
         ValidationVerdict bad = engine.check("t1", new ToolCall("drop", java.util.Map.of(),""));
-        Assert.assertTrue(ok.isPassed(), "search ok");
-        Assert.assertFalse(bad.isPassed(), "drop blocked");
+        assertTrue(ok.isPassed(), "search ok");
+        assertFalse(bad.isPassed(), "drop blocked");
     }
 
+    @Test
     public void testSecurityEnforcerHostileTaint() {
         TaintTracker taint = new TaintTracker();
         TenantPolicyEngine engine = new TenantPolicyEngine();
@@ -62,9 +70,10 @@ public class SecurityTest {
             java.time.Instant.now(), TaintLabel.HOSTILE));
         ToolContract contract = ToolContract.readOnly("search","1.0","search");
         ValidationVerdict v = enforcer.validate(new ToolCall("search", java.util.Map.of(),""), contract, ctx);
-        Assert.assertFalse(v.isPassed(), "hostile taint blocks call");
+        assertFalse(v.isPassed(), "hostile taint blocks call");
     }
 
+    @Test
     public void testSecurityEnforcerIrreversibleBlockedByPolicy() {
         TaintTracker taint = new TaintTracker();
         TenantPolicyEngine engine = new TenantPolicyEngine();
@@ -77,9 +86,10 @@ public class SecurityTest {
             new OperationalParams(java.time.Duration.ofSeconds(10), 0, false, null),
             false, null, Set.of());
         ValidationVerdict v = enforcer.validate(new ToolCall("nuke", java.util.Map.of(),""), irreversible, ctx);
-        Assert.assertFalse(v.isPassed(), "irreversible blocked by policy");
+        assertFalse(v.isPassed(), "irreversible blocked by policy");
     }
 
+    @Test
     public void testSecurityEnforcerPermissiveTenantAllowsIrreversible() {
         TaintTracker taint = new TaintTracker();
         TenantPolicyEngine engine = new TenantPolicyEngine();
@@ -92,6 +102,6 @@ public class SecurityTest {
             new OperationalParams(java.time.Duration.ofSeconds(10), 0, false, null),
             false, null, Set.of());
         ValidationVerdict v = enforcer.validate(new ToolCall("nuke", java.util.Map.of(),""), irreversible, ctx);
-        Assert.assertTrue(v.isPassed(), "permissive admin allowed");
+        assertTrue(v.isPassed(), "permissive admin allowed");
     }
 }

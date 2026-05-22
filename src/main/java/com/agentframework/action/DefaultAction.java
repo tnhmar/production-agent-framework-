@@ -13,6 +13,23 @@ public class DefaultAction implements Action {
     private final ToolDispatcher      dispatcher;
     private final ExecutorService     executor;
 
+    /**
+     * Canonical factory: wires the full 4-layer validation stack defined in the spec:
+     * Schema → Semantic → Policy/Security → Safety/Taint.
+     * Callers may substitute a custom validator list via the constructor overloads.
+     */
+    public static DefaultAction withDefaultValidators(
+            ToolRegistry registry, ToolMiddleware middleware, ToolDispatcher dispatcher,
+            com.agentframework.security.SecurityEnforcer securityEnforcer) {
+        return new DefaultAction(registry,
+            List.of(new SchemaActionValidator(),
+                    new SemanticActionValidator(),
+                    securityEnforcer,
+                    new SafetyActionValidator(),
+                    new TaintActionValidator()),
+            middleware, dispatcher);
+    }
+
     public DefaultAction(ToolRegistry registry, List<ActionValidator> validators,
                          ToolMiddleware middleware, ToolDispatcher dispatcher) {
         this(registry, validators, middleware, dispatcher,

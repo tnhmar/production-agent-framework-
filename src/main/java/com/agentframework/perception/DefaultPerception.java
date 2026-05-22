@@ -23,7 +23,7 @@ public class DefaultPerception implements Perception {
     }
 
     public Observations perceive(ExecutionContext ctx) {
-        ctx.transitionTo(RunState.RESPONDING); // mark as collecting observations
+        // Perception runs inside the PLANNING phase — no state transition here.
         List<Observation> obs = new ArrayList<>();
 
         // 1. Process unread working-memory entries
@@ -66,7 +66,6 @@ public class DefaultPerception implements Perception {
         Goal goal = ctx.goalStack().current().orElse(null);
         List<Observation> filtered = relevanceFilter.filter(obs, goal);
 
-        ctx.transitionTo(RunState.PLANNING);
         return Observations.of(filtered);
     }
 

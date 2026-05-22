@@ -21,7 +21,15 @@ public class HumanApprovalMiddleware implements ToolMiddleware {
             UUID.randomUUID().toString(), ctx.runId(), "agent", ctx.cycleCount(),
             inv.contract().name(), inv.arguments(), "tool call", Map.of(),
             RiskClassification.MEDIUM, "rollback", Instant.now(), Duration.ofHours(1));
-        ApprovalDecision decision = approvalService.awaitDecision(packet);
+        ApprovalDecision decision;
+        try {
+            decision = approvalService.awaitDecision(packet);
+        } catch (com.agentframework.hitl.ApprovalTimeoutException e) {
+            ctx.setTerminationReason(new com.agentframework.foundation.TerminationReason.Escalated(
+                "Approval timed out for tool '" + inv.contract().name() + "': " + e.getMessage()));
+            ctx.transitionTo(RunState.ABORTED);
+            return ToolResult.rejected("approval_timeout:" + e.getMessage());
+        }
         return switch (decision) {
             case ApprovalDecision.Approved a -> { ctx.transitionTo(RunState.TOOL_EXECUTION); yield next.apply(inv); }
             case ApprovalDecision.Modified m -> {

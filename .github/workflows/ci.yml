@@ -19,17 +19,15 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+          cache: maven
 
-      - name: Compile main sources
-        run: |
-          mkdir -p out/main
-          java Compile.java src/main/java out/main
+      - name: Build and run tests
+        run: mvn --batch-mode --no-transfer-progress verify
 
-      - name: Compile test sources
-        run: |
-          mkdir -p out/test
-          java Compile.java src/test/java out/test out/main
-
-      - name: Run tests
-        run: |
-          java -cp out/main:out/test com.agentframework.AllTests
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 14

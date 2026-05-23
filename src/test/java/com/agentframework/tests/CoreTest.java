@@ -131,7 +131,7 @@ public class CoreTest {
         Belief b1 = new Belief("b1","sky","color","blue",  0.7,"obs1", Instant.now(),false);
         Belief b2 = new Belief("b2","sky","color","green", 0.9,"obs2", Instant.now(),false);
         bs.assertBelief(b1);
-        bs.assertBelief(b2); // higher confidence, should win
+        bs.assertBelief(b2);
         assertEquals(1, bs.conflicts().size(), "conflict recorded");
         assertEquals("green", bs.getBySPO("sky","color").get().object(), "higher conf wins");
     }
@@ -214,22 +214,66 @@ public class CoreTest {
         assertEquals("",new Goal("g",null,GoalStatus.PENDING,"t",List.of(),b,null).successCriteria());
         assertEquals("fluent",new Goal("g",null,GoalStatus.PENDING,"t",List.of(),b).withSuccessCriteria("fluent").successCriteria());
     }
+
+    /**
+     * GoalCoherencePlanValidator contract:
+     *
+     * 1. ToolCall on EMPTY stack          → Failed   (no root goal initialised)
+     * 2. Escalate on EMPTY stack          → Passed   (terminal decisions always pass)
+     * 3. FinalAnswer with PENDING root    → Passed   (delivering answer is coherent)
+     * 4. FinalAnswer with COMPLETED root  → Failed   (root already done, spurious answer)
+     * 5. ToolCall with excluded tool      → NeedsCorrection
+     * 6. ToolCall with allowed tool       → Passed
+     *
+     * The empty-stack pre-condition is verified first with an explicit stack-size
+     * assertion so CI logs show a clear message if the context is not truly empty.
+     */
     @Test public void testGoalCoherenceValidator() {
         Budget b=new Budget(10,10_000,java.time.Duration.ofMinutes(1),BigDecimal.ONE);
         GoalCoherencePlanValidator v=new GoalCoherencePlanValidator();
-        assertInstanceOf(ValidationResult.Failed.class,v.validate(new ToolCall("x",Map.of(),""),ctx()));
-        assertInstanceOf(ValidationResult.Passed.class,v.validate(new Escalate("h","HIGH"),ctx()));
+
+        // Pre-condition: ctx() must produce an empty goal stack
+        DefaultExecutionContext emptyCtx = ctx();
+        assertTrue(emptyCtx.goalStack().all().isEmpty(),
+            "ctx() helper must yield an empty goal stack — found: " + emptyCtx.goalStack().all());
+
+        // 1. ToolCall on empty stack → Failed
+        assertInstanceOf(ValidationResult.Failed.class,
+            v.validate(new ToolCall("x",Map.of(),""), emptyCtx),
+            "ToolCall on empty stack must be Failed");
+
+        // 2. Escalate on empty stack → Passed (terminal bypass)
+        assertInstanceOf(ValidationResult.Passed.class,
+            v.validate(new Escalate("h","HIGH"), ctx()),
+            "Escalate must always pass");
+
+        // 3. FinalAnswer with PENDING root → Passed
         DefaultExecutionContext pend=ctx();
         pend.goalStack().push(new Goal("root",null,GoalStatus.PENDING,"t",List.of(),b));
-        assertInstanceOf(ValidationResult.Passed.class,v.validate(new FinalAnswer("ok",List.of()),pend));
+        assertInstanceOf(ValidationResult.Passed.class,
+            v.validate(new FinalAnswer("ok",List.of()),pend),
+            "FinalAnswer with PENDING root must pass");
+
+        // 4. FinalAnswer with COMPLETED root → Failed
         DefaultExecutionContext comp=ctx();
         comp.goalStack().push(new Goal("root",null,GoalStatus.COMPLETED,"t",List.of(),b));
-        assertInstanceOf(ValidationResult.Failed.class,v.validate(new FinalAnswer("x",List.of()),comp));
+        assertInstanceOf(ValidationResult.Failed.class,
+            v.validate(new FinalAnswer("x",List.of()),comp),
+            "FinalAnswer on COMPLETED root must fail");
+
+        // 5. ToolCall with excluded tool → NeedsCorrection
         DefaultExecutionContext excl=ctx();
         excl.goalStack().push(new Goal("root",null,GoalStatus.PENDING,"t",List.of(),b,"do !web_search"));
-        assertInstanceOf(ValidationResult.NeedsCorrection.class,v.validate(new ToolCall("web_search",Map.of(),""),excl));
-        assertInstanceOf(ValidationResult.Passed.class,v.validate(new ToolCall("calc",Map.of(),""),excl));
+        assertInstanceOf(ValidationResult.NeedsCorrection.class,
+            v.validate(new ToolCall("web_search",Map.of(),""),excl),
+            "excluded tool must NeedsCorrection");
+
+        // 6. ToolCall with allowed tool → Passed
+        assertInstanceOf(ValidationResult.Passed.class,
+            v.validate(new ToolCall("calc",Map.of(),""),excl),
+            "non-excluded tool must pass");
     }
+
     @Test public void testCompositePlanValidator() {
         CompositePlanValidator all=new CompositePlanValidator(List.of(new PassThroughPlanValidator(),new PassThroughPlanValidator()));
         assertInstanceOf(ValidationResult.Passed.class,all.validate(new FinalAnswer("ok",List.of()),ctx()));
@@ -239,6 +283,7 @@ public class CoreTest {
         assertInstanceOf(ValidationResult.Failed.class,new CompositePlanValidator(List.of(blk,new PassThroughPlanValidator())).validate(new FinalAnswer("x",List.of()),ctx()));
         assertThrows(IllegalArgumentException.class,()->new CompositePlanValidator(List.of()));
     }
+
     @Test public void testLivenessCounters() {
         DefaultExecutionContext c=ctx();
         c.incrementStagnantCycles();c.incrementStagnantCycles();assertEquals(2,c.stagnantCycles());
@@ -247,6 +292,7 @@ public class CoreTest {
         c.incrementChainDepth();c.incrementChainDepth();assertEquals(2,c.currentChainDepth());
         c.resetChainDepth();assertEquals(0,c.currentChainDepth());
     }
+
     @Test public void testSnapshotIntegrity() {
         ExecutionContext.Snapshot s=ctx().checkpoint();
         assertNotNull(s.integrityHash());assertFalse(s.integrityHash().isBlank());

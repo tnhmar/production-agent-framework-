@@ -17,7 +17,6 @@ import java.util.Map;
 import java.util.concurrent.*;
 public class RuntimeTest {
 
-    /** Build a fully wired Agent with a stub LLM. */
     private Agent agentWith(LLMProvider llm, SimpleToolRegistry reg) {
         DefaultToolDispatcher dispatcher = new DefaultToolDispatcher(reg);
         DefaultAction action = new DefaultAction(reg, List.of(new SafetyActionValidator()),
@@ -52,7 +51,6 @@ public class RuntimeTest {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("calc","1.0","compute math"),
             (args, ctx) -> ToolResult.ok("result:42"));
-        // First call: tool_call, then final_answer
         int[] call = {0};
         LLMProvider llm = prompt -> {
             call[0]++;
@@ -68,17 +66,23 @@ public class RuntimeTest {
         assertTrue(r.cycleRecords().size() >= 2, "at least 2 cycles");
     }
 
+    /**
+     * maxCycles=2: the agent calls 'loop' on cycle 0 and cycle 1 (stagnantCycles=2,
+     * below threshold 3). VALIDATING then sees cycleCount(2) >= maxCycles(2) → ResourceLimit.
+     * Using maxCycles=3 would cause stagnation (threshold=3) to fire first inside
+     * cycle 2's PLANNING step, producing StagnationLimit instead.
+     */
     @Test
     public void testMaxCyclesTermination() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
-        // LLM always wants to call a tool but tool keeps running
         LLMProvider llm = p -> "{\"type\":\"tool_call\",\"tool_name\":\"loop\",\"arguments\":{},\"reasoning_trace\":\"loop\"}";
         reg.register(ToolContract.readOnly("loop","1.0","loops"), (a,c) -> ToolResult.ok("looping"));
         Agent agent = agentWith(llm, reg);
-        Task task = Task.builder().instruction("loop forever").maxCycles(3).build();
+        Task task = Task.builder().instruction("loop forever").maxCycles(2).build();
         ExecutionResult r = runtime().execute(agent, task);
         assertFalse(r.succeeded(), "not succeeded (resource limit)");
-        assertTrue(r.terminationReason() instanceof TerminationReason.ResourceLimit, "resource limit");
+        assertTrue(r.terminationReason() instanceof TerminationReason.ResourceLimit,
+            "expected ResourceLimit but got: " + r.terminationReason());
     }
 
     @Test
@@ -93,7 +97,6 @@ public class RuntimeTest {
     @Test
     public void testConsecutiveFailuresTerminate() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
-        // Register tool that always throws
         reg.register(ToolContract.readOnly("fail","1.0","always fails"),
             (args,ctx) -> { throw new ToolException("FAIL","deliberate failure"); });
         LLMProvider llm = p -> "{\"type\":\"tool_call\",\"tool_name\":\"fail\",\"arguments\":{},\"reasoning_trace\":\"try\"}";
@@ -160,22 +163,15 @@ public class RuntimeTest {
         ExecutionResult r2 = rt.execute(agent, task, "tenant-B", "user2");
         assertTrue(r1.succeeded(), "tenant-A succeeded");
         assertTrue(r2.succeeded(), "tenant-B succeeded");
-        // Both runs must have produced at least one recorded cycle.
-        // The assertion uses assertFalse(both-empty) — equivalent to: at least one has cycles.
         assertFalse(
             r1.cycleRecords().isEmpty() && r2.cycleRecords().isEmpty(),
             "both ran");
     }
 
     /**
-     * N1 stagnation: the agent repeatedly calls the same tool with the same
-     * arguments so the goal-state hash never changes.  After maxStagnantCycles
-     * the detector terminates with {@link TerminationReason.StagnationLimit}.
-     *
-     * <p>Note: {@code DefaultLivenessDetector.checkStagnation()} returns
-     * {@link TerminationReason.StagnationLimit}, NOT {@link TerminationReason.Escalated}.
-     * Escalated is returned only by the N2 stuck-state detector
-     * ({@code checkStuck}) when no substantive decision is made.
+     * N1 stagnation: repeated identical tool call → goal-state hash unchanged →
+     * StagnationLimit after maxStagnantCycles=3. maxCycles=20 ensures the resource
+     * limit does not interfere.
      */
     @Test public void testStagnationDetectorTerminates() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
@@ -186,9 +182,8 @@ public class RuntimeTest {
             agentWith(StubLLMProvider.toolCall("noop", "{}"), reg),
             Task.builder().instruction("loop").maxCycles(20).build(), "t1", "u1");
         assertFalse(r.succeeded());
-        // DefaultLivenessDetector.checkStagnation() always returns StagnationLimit.
-        // Escalated is produced only by the N2 stuck-state path.
-        assertInstanceOf(TerminationReason.StagnationLimit.class, r.terminationReason());
+        assertInstanceOf(TerminationReason.StagnationLimit.class, r.terminationReason(),
+            "expected StagnationLimit but got: " + r.terminationReason());
         assertTrue(sink.count(AgentEvent.EventType.GOAL_STAGNATION_DETECTED) >= 1);
     }
 
@@ -209,16 +204,8 @@ public class RuntimeTest {
         assertEquals(0, b.retryCount());
     }
 
-    /**
-     * RetryMiddleware requires {@code baseBackoffMs > 0} (production guard against
-     * busy-spin retries).  Tests that need instantaneous retries must pass at least
-     * 1 ms and cap {@code maxBackoffMs} to 1 ms as well.  Using a seeded
-     * {@link java.util.Random} makes the jitter deterministic.
-     */
     @Test public void testRetryMiddlewareAttachesCount() {
         java.util.concurrent.atomic.AtomicInteger a = new java.util.concurrent.atomic.AtomicInteger();
-        // baseBackoffMs=1, maxBackoffMs=1 → effectively no sleep in tests;
-        // seeded Random for deterministic jitter.
         RetryMiddleware mw = new RetryMiddleware(2, 1L, 1L, new java.util.Random(42));
         ToolInvocation inv = new ToolInvocation(
             ToolContract.readOnly("t","1.0","t"), Map.of(), null, ValidationVerdict.ok());

@@ -1,25 +1,59 @@
 package com.agentframework.core;
+
 import com.agentframework.foundation.*;
 import com.agentframework.observability.*;
+import com.agentframework.security.TaintClassifier;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-class Review {
-    private final PlanValidator validator;
-    private final EventSink     events;
-    private static final int    MAX_FAILURES = 3;
 
+/**
+ * Post-action review step executed inside each PLANNING cycle.
+ *
+ * <p>Key responsibility added here: every {@link ActionResult} written to working
+ * memory is classified by {@link TaintClassifier} <em>before</em> the write.
+ * Tool output is tagged {@link TaintLabel#EXTERNAL} by default; payloads matching
+ * known injection patterns are tagged {@link TaintLabel#HOSTILE}, which will block
+ * further tool dispatch via {@code TaintActionValidator} on the next cycle.
+ *
+ * <p>Internal results (validation failures, clarifications, escalations) are
+ * system-generated and remain {@link TaintLabel#CLEAN}.
+ */
+class Review {
+    private final PlanValidator   validator;
+    private final EventSink       events;
+    private final TaintClassifier taintClassifier;
+    private static final int      MAX_FAILURES = 3;
+
+    /** Production constructor — uses shared TaintClassifier instance. */
     Review(PlanValidator validator, EventSink events) {
-        this.validator=validator; this.events=events;
+        this(validator, events, new TaintClassifier());
+    }
+
+    /** Testable constructor — allows injecting a custom TaintClassifier. */
+    Review(PlanValidator validator, EventSink events, TaintClassifier taintClassifier) {
+        this.validator       = validator;
+        this.events          = events;
+        this.taintClassifier = taintClassifier;
     }
 
     void step(ActionResult result, Decision decision, Observations obs,
               ExecutionContext ctx, Agent agent) {
-        // 1. Record result in working memory
+
+        // 1. Classify taint BEFORE writing to working memory
+        TaintLabel taint   = classifyResultTaint(result);
+        String     summary = summarize(result);
+
         ctx.workingMemory().add(new WorkingMemoryEntry(
-            UUID.randomUUID().toString(), summarize(result),
-            WorkingMemoryTier.ACTIVE, Origin.SYSTEM, 0.9,
-            Instant.now(), TaintLabel.CLEAN));
+            UUID.randomUUID().toString(), summary,
+            WorkingMemoryTier.ACTIVE, Origin.TOOL, 0.9,
+            Instant.now(), taint));
+
+        if (taint == TaintLabel.HOSTILE) {
+            events.emit(new AgentEvent(ctx.runId(), ctx.tenantId(),
+                AgentEvent.EventType.HOSTILE_TAINT_DETECTED, Instant.now(),
+                Map.of("summary", summary.substring(0, Math.min(200, summary.length())))));
+        }
 
         // 2. Evict if context window is getting full
         new ContextWindowManager().manage(ctx.workingMemory(), ctx.task().maxTokens());
@@ -34,7 +68,7 @@ class Review {
         if (result instanceof ActionResult.Success s && s.result().indicatesWorldChange()) {
             try {
                 agent.memory().write(
-                    com.agentframework.memory.MemoryContent.text(summarize(result)),
+                    com.agentframework.memory.MemoryContent.text(summary),
                     com.agentframework.memory.MemoryType.EPISODIC,
                     com.agentframework.memory.MemoryMetadata.of(0.7, "tool_result"),
                     ctx.requestContext());
@@ -64,15 +98,38 @@ class Review {
         }
     }
 
+    /**
+     * Derives the taint label for the result being written to working memory.
+     *
+     * <ul>
+     *   <li>Success / Failure — external data; classify the payload content.</li>
+     *   <li>PartialSuccess — hostile if ANY individual result is hostile.</li>
+     *   <li>ValidationFailure / Escalated / Clarification — system-generated; CLEAN.</li>
+     * </ul>
+     */
+    private TaintLabel classifyResultTaint(ActionResult result) {
+        return switch (result) {
+            case ActionResult.Success s -> taintClassifier.classifyObject(s.result().data());
+            case ActionResult.PartialSuccess ps -> {
+                boolean anyHostile = ps.results().stream()
+                    .anyMatch(r -> taintClassifier.classifyObject(r.data()) == TaintLabel.HOSTILE);
+                yield anyHostile ? TaintLabel.HOSTILE : TaintLabel.EXTERNAL;
+            }
+            case ActionResult.Failure f ->
+                taintClassifier.classify(f.message()); // error messages may carry injection text
+            case ActionResult.ValidationFailure __,
+                 ActionResult.Escalated __,
+                 ActionResult.Clarification __ -> TaintLabel.CLEAN;
+        };
+    }
+
     private void updateGoals(ActionResult result, Decision decision, ExecutionContext ctx) {
         GoalStack goals = ctx.goalStack();
         switch (decision) {
             case ToolCall tc -> {
-                // Only complete non-root sub-goals on success; root is only completed by FinalAnswer
                 if (result instanceof ActionResult.Success) {
                     goals.current().ifPresent(g -> {
                         if (!g.id().equals("root")) goals.updateStatus(g.id(), GoalStatus.COMPLETED);
-                        // else: keep root PENDING/ACTIVE until FinalAnswer
                     });
                 } else if (result instanceof ActionResult.Failure) {
                     goals.current().ifPresent(g -> goals.updateStatus(g.id(), GoalStatus.FAILED));
@@ -116,12 +173,15 @@ class Review {
 
     private String summarize(ActionResult r) {
         return switch (r) {
-            case ActionResult.Success s     -> "SUCCESS: " + (s.result().data() != null ? s.result().data().toString().substring(0, Math.min(200, s.result().data().toString().length())) : "null");
-            case ActionResult.Failure f     -> "FAILURE[" + f.errorCode() + "]: " + f.message();
+            case ActionResult.Success s ->
+                "SUCCESS: " + (s.result().data() != null
+                    ? s.result().data().toString().substring(0, Math.min(200, s.result().data().toString().length()))
+                    : "null");
+            case ActionResult.Failure f            -> "FAILURE[" + f.errorCode() + "]: " + f.message();
             case ActionResult.ValidationFailure vf -> "VALIDATION_FAILURE: " + vf.verdict();
             case ActionResult.PartialSuccess ps    -> "PARTIAL: " + ps.results().size() + " ok, " + ps.errors().size() + " err";
-            case ActionResult.Escalated e   -> "ESCALATED: " + e.reason();
-            case ActionResult.Clarification c -> "CLARIFY: " + c.question();
+            case ActionResult.Escalated e          -> "ESCALATED: " + e.reason();
+            case ActionResult.Clarification c      -> "CLARIFY: " + c.question();
         };
     }
 }

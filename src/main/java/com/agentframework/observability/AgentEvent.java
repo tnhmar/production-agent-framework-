@@ -9,6 +9,13 @@ public record AgentEvent(String runId, String tenantId, EventType type,
         TOOL_CALLED, TOOL_SUCCEEDED, TOOL_FAILED,
         PLAN_STALE, BELIEF_CONFLICT, HITL_REQUESTED, HITL_RESOLVED,
         MEMORY_WRITTEN, MEMORY_RETRIEVED,
-        CONTEXT_EVICTED, RESOURCE_LIMIT_HIT
+        CONTEXT_EVICTED, RESOURCE_LIMIT_HIT,
+        // Security
+        HOSTILE_TAINT_DETECTED,
+        // Liveness
+        GOAL_STAGNATION_DETECTED,
+        STUCK_STATE_DETECTED,
+        // Multi-agent
+        DELEGATION_DEPTH_EXCEEDED
     }
 }

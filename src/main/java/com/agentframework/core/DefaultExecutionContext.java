@@ -10,40 +10,42 @@ import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 public class DefaultExecutionContext implements ExecutionContext {
-    /** Schema version for checkpoint format — increment on breaking changes. */
+
     public static final String SNAPSHOT_SCHEMA_VERSION = "1.0";
 
-    private final String         runId       = UUID.randomUUID().toString();
+    private final String         runId     = UUID.randomUUID().toString();
     private final RequestContext reqCtx;
-    private final Instant        startTime   = Instant.now();
+    private final Instant        startTime = Instant.now();
     private final Task           task;
-    private RunState   state          = RunState.INITIALIZED;
-    private int        cycle          = 0;
-    private int        consFailures   = 0;
-    private int        chainDepth     = 0;
-    private int        revisions      = 0;
-    private boolean    planStale      = false;
+    private RunState   state        = RunState.INITIALIZED;
+    private int        cycle        = 0;
+    private int        consFailures = 0;
+    private int        chainDepth   = 0;
+    private int        revisions    = 0;
+    private boolean    planStale    = false;
     private String     stalenessHint;
+    // Liveness counters (N1 + N2)
+    private int        stagnantCycles = 0;
+    private int        stuckCycles    = 0;
+
     private final DefaultGoalStack     goalStack     = new DefaultGoalStack();
     private final DefaultWorkingMemory workingMemory = new DefaultWorkingMemory();
     private final DefaultBeliefState   beliefState   = new DefaultBeliefState();
     private final Map<String, JobToken> activeJobs   = new ConcurrentHashMap<>();
     private final List<CycleRecord>     trace        = Collections.synchronizedList(new ArrayList<>());
-    private int        totalTokens  = 0;
-    private BigDecimal totalCost    = BigDecimal.ZERO;
+    private int        totalTokens = 0;
+    private BigDecimal totalCost   = BigDecimal.ZERO;
     private TerminationReason terminationReason;
 
-    /**
-     * Creates a context with explicit tenant and user.
-     * IC5 fix: null tenantId is rejected rather than silently defaulting to "default" (permissive).
-     */
     public DefaultExecutionContext(Task task, String tenantId, String userId) {
         this.task   = Objects.requireNonNull(task, "task must not be null");
-        Objects.requireNonNull(tenantId, "tenantId must not be null — pass an explicit tenant ID. " +
+        Objects.requireNonNull(tenantId,
+            "tenantId must not be null — pass an explicit tenant ID. " +
             "Use TenantPolicy.permissive(tenantId) to register an unrestricted policy.");
         this.reqCtx = RequestContext.of(tenantId, userId != null ? userId : "system");
     }
 
+    // ── Core accessors ───────────────────────────────────────────────────────
     public String         runId()              { return runId; }
     public String         tenantId()           { return reqCtx.tenantId(); }
     public Instant        startTime()          { return startTime; }
@@ -59,15 +61,29 @@ public class DefaultExecutionContext implements ExecutionContext {
     public int   currentChainDepth()           { return chainDepth; }
     public void  incrementChainDepth()         { chainDepth++; }
     public void  resetChainDepth()             { chainDepth = 0; }
-    public GoalStack     goalStack()           { return goalStack; }
-    public WorkingMemory workingMemory()       { return workingMemory; }
-    public BeliefState   beliefState()         { return beliefState; }
+
+    // ── Liveness counters ────────────────────────────────────────────────────
+    public int  stagnantCycles()          { return stagnantCycles; }
+    public void incrementStagnantCycles() { stagnantCycles++; }
+    public void resetStagnantCycles()     { stagnantCycles = 0; }
+    public int  stuckCycles()             { return stuckCycles; }
+    public void incrementStuckCycles()    { stuckCycles++; }
+    public void resetStuckCycles()        { stuckCycles = 0; }
+
+    // ── Goal / memory / belief ───────────────────────────────────────────────
+    public GoalStack     goalStack()     { return goalStack; }
+    public WorkingMemory workingMemory() { return workingMemory; }
+    public BeliefState   beliefState()   { return beliefState; }
+
+    // ── Revision / plan staleness ────────────────────────────────────────────
     public int     revisionCount()             { return revisions; }
     public void    incrementRevisionCount()    { revisions++; }
     public boolean isRevisionBudgetExceeded(int max) { return revisions > max; }
     public void    flagPlanStale(String hint)  { planStale = hint != null; stalenessHint = hint; }
     public boolean isPlanStale()               { return planStale; }
     public String  stalenessHint()             { return stalenessHint; }
+
+    // ── Jobs / trace / resources ─────────────────────────────────────────────
     public Map<String, JobToken> activeJobs()  { return activeJobs; }
     public void    recordCycle(CycleRecord r)  { trace.add(r); }
     public List<CycleRecord> trace()           { return new ArrayList<>(trace); }
@@ -78,9 +94,7 @@ public class DefaultExecutionContext implements ExecutionContext {
     public Optional<TerminationReason> terminationReason() { return Optional.ofNullable(terminationReason); }
     public void setTerminationReason(TerminationReason r)  { terminationReason = r; }
 
-    /**
-     * C1 fix: produces a full, integrity-hashed checkpoint snapshot.
-     */
+    // ── Checkpoint ───────────────────────────────────────────────────────────
     public Snapshot checkpoint() {
         List<Goal>               goals   = goalStack.all();
         List<WorkingMemoryEntry> wm      = workingMemory.getAll();
@@ -95,25 +109,35 @@ public class DefaultExecutionContext implements ExecutionContext {
             totalTokens, totalCost, hash);
     }
 
-    // -------------------------------------------------------------------------
-    // Full snapshot record (C1 fix)
-    // -------------------------------------------------------------------------
-    record FullSnapshot(
-        String                   runId,
-        RunState                 state,
-        int                      cycle,
-        String                   schemaVersion,
-        List<Goal>               goalStackSnapshot,
-        List<WorkingMemoryEntry> workingMemorySnapshot,
-        List<Belief>             beliefSnapshot,
-        int                      totalTokens,
-        BigDecimal               totalCost,
-        String                   integrityHash
-    ) implements Snapshot {}
+    /**
+     * Restores mutable execution state from a previously persisted snapshot.
+     * Called by {@code AgentRuntime.replay()} before handing the context to the
+     * state machine runner.
+     *
+     * <p>The following fields are restored: cycle counter, state, goal stack,
+     * working memory, belief state, token / cost accumulators.  The run ID and
+     * start time are <em>not</em> overwritten — the replay run has its own identity.
+     */
+    public void restoreFromSnapshot(Snapshot snap) {
+        this.cycle       = snap.cycle();
+        this.state       = snap.state();
+        this.totalTokens = snap.totalTokens();
+        this.totalCost   = snap.totalCost();
+        snap.goalStackSnapshot().forEach(goalStack::push);
+        snap.workingMemorySnapshot().forEach(workingMemory::add);
+        snap.beliefSnapshot().forEach(beliefState::assertBelief);
+    }
 
-    // -------------------------------------------------------------------------
-    // SHA-256 integrity hash over canonical state string
-    // -------------------------------------------------------------------------
+    // ── Static hash helper (also used by AgentRuntime for replay verification) ─
+    public static String computeSnapshotHash(Snapshot snap) {
+        return computeHash(
+            snap.runId(), snap.state(), snap.cycle(),
+            snap.goalStackSnapshot(),
+            snap.workingMemorySnapshot(),
+            snap.beliefSnapshot(),
+            snap.totalTokens(), snap.totalCost());
+    }
+
     private static String computeHash(String runId, RunState state, int cycle,
             List<Goal> goals, List<WorkingMemoryEntry> wm,
             List<Belief> beliefs, int tokens, BigDecimal cost) {
@@ -132,4 +156,18 @@ public class DefaultExecutionContext implements ExecutionContext {
             return "hash-unavailable";
         }
     }
+
+    // ── FullSnapshot record ──────────────────────────────────────────────────
+    record FullSnapshot(
+        String                   runId,
+        RunState                 state,
+        int                      cycle,
+        String                   schemaVersion,
+        List<Goal>               goalStackSnapshot,
+        List<WorkingMemoryEntry> workingMemorySnapshot,
+        List<Belief>             beliefSnapshot,
+        int                      totalTokens,
+        BigDecimal               totalCost,
+        String                   integrityHash
+    ) implements Snapshot {}
 }

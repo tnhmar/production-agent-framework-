@@ -7,10 +7,12 @@ import java.util.function.Function;
 /**
  * Retry middleware with exponential backoff.
  *
- * <p>m5 fix: when the {@link ToolInvocation}'s contract has {@link OperationalParams},
- * the retry count and timeout from that contract take precedence over the defaults
- * supplied at construction time. This enables per-tool retry policies defined in the
- * tool contract to be honoured automatically.
+ * <p>m5 fix: per-tool retry policy from {@link OperationalParams} takes precedence
+ * over construction-time defaults.  Non-idempotent tools are hard-capped at 0 retries.
+ *
+ * <p>N4 fix: the final {@link ToolResult} carries the actual retry count via
+ * {@link ToolResult#withRetryCount(int)} so the audit trail in {@code CycleRecord}
+ * can distinguish a first-attempt success from a success after N retries.
  */
 public class RetryMiddleware implements ToolMiddleware {
     private final int  defaultMaxRetries;
@@ -21,21 +23,23 @@ public class RetryMiddleware implements ToolMiddleware {
         this.defaultBackoffMs  = defaultBackoffMs;
     }
 
+    @Override
     public ToolResult apply(ToolInvocation inv, Function<ToolInvocation, ToolResult> next) {
-        // m5 fix: resolve retry count from contract's OperationalParams if present
         OperationalParams params = inv.contract() != null ? inv.contract().operationalParams() : null;
         int  maxRetries = (params != null) ? params.maxRetries() : defaultMaxRetries;
         long backoffMs  = defaultBackoffMs;
 
-        // Non-idempotent tools must not be retried — spec: "Require deduplication or explicit control"
+        // Non-idempotent tools must never be retried automatically
         if (params != null && !params.idempotent() && maxRetries > 0) {
-            maxRetries = 0; // hard cap: never retry a non-idempotent tool automatically
+            maxRetries = 0;
         }
 
         int attempt = 0;
         while (true) {
             try {
-                return next.apply(inv);
+                ToolResult raw = next.apply(inv);
+                // N4 fix: attach attempt count; 0 means first-attempt success
+                return attempt == 0 ? raw : raw.withRetryCount(attempt);
             } catch (RuntimeException e) {
                 if (++attempt > maxRetries) throw e;
                 try {

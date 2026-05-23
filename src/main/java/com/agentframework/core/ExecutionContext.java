@@ -5,6 +5,12 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
 
+/**
+ * Per-run execution context threaded through the entire agent lifecycle.
+ *
+ * <p>Extended with liveness counters ({@code stagnantCycles}, {@code stuckCycles})
+ * required by the stagnation and stuck-state detectors in {@link StateMachineRunner}.
+ */
 public interface ExecutionContext {
     String         runId();
     String         tenantId();
@@ -24,6 +30,19 @@ public interface ExecutionContext {
     void incrementChainDepth();
     void resetChainDepth();
 
+    // ── Liveness counters (N1 + N2) ─────────────────────────────────────────
+    /** Cycles where the goal-state hash was identical to the previous cycle. */
+    int  stagnantCycles();
+    void incrementStagnantCycles();
+    void resetStagnantCycles();
+
+    /** Cycles where the decision was neither a ToolCall, ParallelToolCalls,
+     *  FinalAnswer, nor Escalate — i.e. the agent produced no forward progress. */
+    int  stuckCycles();
+    void incrementStuckCycles();
+    void resetStuckCycles();
+    // ────────────────────────────────────────────────────────────────────────
+
     GoalStack     goalStack();
     WorkingMemory workingMemory();
     BeliefState   beliefState();
@@ -37,7 +56,7 @@ public interface ExecutionContext {
 
     Map<String, JobToken> activeJobs();
 
-    void             recordCycle(CycleRecord r);
+    void              recordCycle(CycleRecord r);
     List<CycleRecord> trace();
 
     int        totalTokensUsed();
@@ -51,7 +70,7 @@ public interface ExecutionContext {
     Snapshot checkpoint();
 
     /**
-     * Full, schema-versioned checkpoint snapshot (C1 fix).
+     * Full, schema-versioned checkpoint snapshot.
      * Contains all state required for deterministic resume:
      * run ID, step index, state, goal stack, working memory entries,
      * beliefs, token/cost accumulators, and a SHA-256 integrity hash.
@@ -60,13 +79,12 @@ public interface ExecutionContext {
         String                   runId();
         RunState                 state();
         int                      cycle();
-        // Extended fields for full checkpoint conformance
         String                   schemaVersion();
         List<Goal>               goalStackSnapshot();
         List<WorkingMemoryEntry> workingMemorySnapshot();
         List<Belief>             beliefSnapshot();
         int                      totalTokens();
         BigDecimal               totalCost();
-        String                   integrityHash();   // SHA-256 of canonical JSON
+        String                   integrityHash();
     }
 }

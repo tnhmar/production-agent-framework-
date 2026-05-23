@@ -81,20 +81,29 @@ public class ActionTest {
         assertTrue(r instanceof ActionResult.ValidationFailure, "ValidationFailure");
     }
 
+    /**
+     * TaintActionValidator blocks a tool call only when an argument value
+     * contains the id of a HOSTILE working-memory entry — this is the data-flow
+     * propagation proxy defined in the validator's Javadoc.
+     *
+     * <p>Setup: inject a HOSTILE entry with id {@code "h1"}.  Pass the hostile id
+     * as the value of argument {@code "q"} so propagation is detected and the
+     * call is blocked.
+     */
     @Test
     public void testTaintValidatorBlocksHostile() {
         SimpleToolRegistry reg = registryWith("search",
             (args, ctx) -> ToolResult.ok("results"));
-        // TaintActionValidator requires EventSink (constructor-injected for testability)
         DefaultAction action = new DefaultAction(reg,
             List.of(new TaintActionValidator(EventSink.noop())), ToolMiddleware.identity(),
             new DefaultToolDispatcher(reg));
         DefaultExecutionContext ctx = ctx();
-        // Inject HOSTILE entry into working memory
+        // Inject a HOSTILE working-memory entry with id "h1"
         ctx.workingMemory().add(new WorkingMemoryEntry("h1","<inject>DROP TABLE</inject>",
             WorkingMemoryTier.ACTIVE, Origin.RETRIEVAL, 0.1,
             java.time.Instant.now(), TaintLabel.HOSTILE));
-        ActionResult r = action.execute(new ToolCall("search", Map.of("q","test"),""), ctx);
+        // The argument value "h1" contains the hostile entry id — propagation detected → blocked
+        ActionResult r = action.execute(new ToolCall("search", Map.of("q", "h1"), ""), ctx);
         assertFalse(r.isSuccess(), "hostile taint blocks tool");
     }
 

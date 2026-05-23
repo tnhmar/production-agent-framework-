@@ -22,6 +22,15 @@ import java.util.UUID;
  *               ↪ (on limit)   → TOOL_EXECUTION → MEMORY_UPDATE
  *                               → TERMINATED / COMPLETED / ABORTED
  * </pre>
+ *
+ * <p><b>Fix — cycle record ordering</b>: {@code recordCycle()} and
+ * {@code incrementCycle()} are now called <em>unconditionally</em> at the end of
+ * every PLANNING step, <em>before</em> the {@code isLive()} guard that returns
+ * early on terminal state.  Previously the record was skipped whenever
+ * {@link Review} transitioned the context to a terminal state (COMPLETED /
+ * TERMINATED) during the same cycle — causing {@link ExecutionResult#cycleRecords()}
+ * to be empty and {@link ExecutionResult#finalAnswer()} to return {@code null}
+ * for every terminal cycle including a direct {@link FinalAnswer}.
  */
 class StateMachineRunner {
 
@@ -122,23 +131,29 @@ class StateMachineRunner {
                         // Pass injected taintClassifier — not constructed inline
                         new Review(validator, events, taintClassifier)
                             .step(result, decision, obs, ctx, agent);
-                        if (!ctx.currentState().isLive()) return;
 
-                        // N1: stagnation check
+                        // N1: stagnation check (runs even on terminal cycles so the
+                        // hash is computed, but we only fire if still live).
                         String postGoalHash = DefaultLivenessDetector.hashGoalState(
                             ctx.goalStack().all());
-                        liveness.checkStagnation(preGoalHash, postGoalHash, decision, ctx)
-                            .ifPresent(reason -> terminate(ctx, reason,
-                                AgentEvent.EventType.GOAL_STAGNATION_DETECTED,
-                                Map.of("cycles", ctx.stagnantCycles(),
-                                       "goalHash", postGoalHash)));
-                        if (!ctx.currentState().isLive()) return;
+                        if (ctx.currentState().isLive()) {
+                            liveness.checkStagnation(preGoalHash, postGoalHash, decision, ctx)
+                                .ifPresent(reason -> terminate(ctx, reason,
+                                    AgentEvent.EventType.GOAL_STAGNATION_DETECTED,
+                                    Map.of("cycles", ctx.stagnantCycles(),
+                                           "goalHash", postGoalHash)));
+                        }
 
+                        // ALWAYS record the cycle — including the terminal one.
+                        // Previously this was placed after an isLive() guard, which
+                        // caused the terminal cycle (FinalAnswer, Escalate) to never
+                        // be persisted, leaving cycleRecords empty and finalAnswer null.
                         ctx.recordCycle(CycleRecord.of(
                             ctx.cycleCount(), obs, decision, result, "ok"));
                         ctx.incrementCycle();
                         emit(ctx, AgentEvent.EventType.CYCLE_COMPLETED,
                             Map.of("cycle", ctx.cycleCount()));
+
                         if (!ctx.currentState().isTerminal())
                             ctx.transitionTo(RunState.VALIDATING);
                     }

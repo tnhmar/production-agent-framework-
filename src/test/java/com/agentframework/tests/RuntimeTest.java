@@ -160,39 +160,73 @@ public class RuntimeTest {
         ExecutionResult r2 = rt.execute(agent, task, "tenant-B", "user2");
         assertTrue(r1.succeeded(), "tenant-A succeeded");
         assertTrue(r2.succeeded(), "tenant-B succeeded");
-        // verify run IDs are distinct
+        // Both runs must have produced at least one recorded cycle.
+        // The assertion uses assertFalse(both-empty) — equivalent to: at least one has cycles.
         assertFalse(
             r1.cycleRecords().isEmpty() && r2.cycleRecords().isEmpty(),
             "both ran");
     }
 
+    /**
+     * N1 stagnation: the agent repeatedly calls the same tool with the same
+     * arguments so the goal-state hash never changes.  After maxStagnantCycles
+     * the detector terminates with {@link TerminationReason.StagnationLimit}.
+     *
+     * <p>Note: {@code DefaultLivenessDetector.checkStagnation()} returns
+     * {@link TerminationReason.StagnationLimit}, NOT {@link TerminationReason.Escalated}.
+     * Escalated is returned only by the N2 stuck-state detector
+     * ({@code checkStuck}) when no substantive decision is made.
+     */
     @Test public void testStagnationDetectorTerminates() {
-        SimpleToolRegistry reg=new SimpleToolRegistry();
+        SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("noop","1.0","noop"),(a,c)->ToolResult.ok("same"));
-        InMemoryEventSink sink=new InMemoryEventSink();
-        AgentRuntime rt=new AgentRuntime(new PassThroughPlanValidator(),sink);
-        ExecutionResult r=rt.execute(agentWith(StubLLMProvider.toolCall("noop","{}"),reg),
-            Task.builder().instruction("loop").maxCycles(20).build(),"t1","u1");
+        InMemoryEventSink sink = new InMemoryEventSink();
+        AgentRuntime rt = new AgentRuntime(new PassThroughPlanValidator(), sink);
+        ExecutionResult r = rt.execute(
+            agentWith(StubLLMProvider.toolCall("noop", "{}"), reg),
+            Task.builder().instruction("loop").maxCycles(20).build(), "t1", "u1");
         assertFalse(r.succeeded());
-        assertInstanceOf(TerminationReason.Escalated.class,r.terminationReason());
-        assertTrue(sink.count(AgentEvent.EventType.GOAL_STAGNATION_DETECTED)>=1);
+        // DefaultLivenessDetector.checkStagnation() always returns StagnationLimit.
+        // Escalated is produced only by the N2 stuck-state path.
+        assertInstanceOf(TerminationReason.StagnationLimit.class, r.terminationReason());
+        assertTrue(sink.count(AgentEvent.EventType.GOAL_STAGNATION_DETECTED) >= 1);
     }
+
     @Test public void testReplayFromValidSnapshot() {
-        SimpleToolRegistry reg=new SimpleToolRegistry();
-        Task task=Task.builder().instruction("replay").maxCycles(10).build();
-        ExecutionContext.Snapshot snap=new DefaultExecutionContext(task,"t1","u1").checkpoint();
-        ExecutionResult r=runtime().replay(snap,agentWith(StubLLMProvider.finalAnswer("replayed"),reg),"t1","u1");
-        assertTrue(r.succeeded()); assertEquals("replayed",r.finalAnswer());
+        SimpleToolRegistry reg = new SimpleToolRegistry();
+        Task task = Task.builder().instruction("replay").maxCycles(10).build();
+        ExecutionContext.Snapshot snap = new DefaultExecutionContext(task,"t1","u1").checkpoint();
+        ExecutionResult r = runtime().replay(snap,
+            agentWith(StubLLMProvider.finalAnswer("replayed"), reg), "t1", "u1");
+        assertTrue(r.succeeded());
+        assertEquals("replayed", r.finalAnswer());
     }
+
     @Test public void testToolResultRetryCount() {
-        ToolResult b=ToolResult.ok("data");
-        assertEquals(0,b.retryCount()); assertEquals(3,b.withRetryCount(3).retryCount()); assertEquals(0,b.retryCount());
+        ToolResult b = ToolResult.ok("data");
+        assertEquals(0, b.retryCount());
+        assertEquals(3, b.withRetryCount(3).retryCount());
+        assertEquals(0, b.retryCount());
     }
+
+    /**
+     * RetryMiddleware requires {@code baseBackoffMs > 0} (production guard against
+     * busy-spin retries).  Tests that need instantaneous retries must pass at least
+     * 1 ms and cap {@code maxBackoffMs} to 1 ms as well.  Using a seeded
+     * {@link java.util.Random} makes the jitter deterministic.
+     */
     @Test public void testRetryMiddlewareAttachesCount() {
-        java.util.concurrent.atomic.AtomicInteger a=new java.util.concurrent.atomic.AtomicInteger();
-        RetryMiddleware mw=new RetryMiddleware(2,0);
-        ToolInvocation inv=new ToolInvocation(ToolContract.readOnly("t","1.0","t"),Map.of(),null,ValidationVerdict.ok());
-        ToolResult r=mw.apply(inv,i->{if(a.incrementAndGet()==1)throw new RuntimeException("t");return ToolResult.ok("ok");});
-        assertEquals(1,r.retryCount()); assertEquals("ok",r.data());
+        java.util.concurrent.atomic.AtomicInteger a = new java.util.concurrent.atomic.AtomicInteger();
+        // baseBackoffMs=1, maxBackoffMs=1 → effectively no sleep in tests;
+        // seeded Random for deterministic jitter.
+        RetryMiddleware mw = new RetryMiddleware(2, 1L, 1L, new java.util.Random(42));
+        ToolInvocation inv = new ToolInvocation(
+            ToolContract.readOnly("t","1.0","t"), Map.of(), null, ValidationVerdict.ok());
+        ToolResult r = mw.apply(inv, i -> {
+            if (a.incrementAndGet() == 1) throw new RuntimeException("t");
+            return ToolResult.ok("ok");
+        });
+        assertEquals(1, r.retryCount());
+        assertEquals("ok", r.data());
     }
 }

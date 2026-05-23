@@ -21,6 +21,12 @@ import java.util.Optional;
  *
  * <p>Post-action re-validation checks that a world-changing action has not driven
  * the root goal into FAILED status.
+ *
+ * <p><b>Empty-stack guard</b>: if {@code goalStack().all()} is empty (i.e. the
+ * context has not been initialised by the state machine's INITIALIZED step) any
+ * non-terminal decision is rejected with {@link ValidationResult.Failed}.  This
+ * makes the validator safe to use in unit tests that build a bare
+ * {@link DefaultExecutionContext} without running it through the state machine.
  */
 public class GoalCoherencePlanValidator implements PlanValidator {
 
@@ -31,7 +37,14 @@ public class GoalCoherencePlanValidator implements PlanValidator {
             return new ValidationResult.Passed();
         }
 
-        Optional<Goal> rootOpt = ctx.goalStack().all().stream()
+        // Explicit empty-stack guard: a non-terminal decision issued before the
+        // state machine has pushed a root goal is always a coherence failure.
+        List<Goal> allGoals = ctx.goalStack().all();
+        if (allGoals.isEmpty()) {
+            return new ValidationResult.Failed("No root goal on the stack", List.of());
+        }
+
+        Optional<Goal> rootOpt = allGoals.stream()
             .filter(g -> "root".equals(g.id()))
             .findFirst();
 
@@ -57,11 +70,11 @@ public class GoalCoherencePlanValidator implements PlanValidator {
                     "Tool '" + toolName + "' is excluded for goal '" + active.id() + "'", null);
             }
 
-            // Typed whitelist check — only applies when the required set is non-empty
+            // Typed whitelist check — only enforced when set is non-empty
             if (!active.requiredTools().isEmpty() && !active.requiredTools().contains(toolName)) {
                 return new ValidationResult.NeedsCorrection(
-                    "Tool '" + toolName + "' is not in the required-tool set for goal '"
-                    + active.id() + "'. Permitted tools: " + active.requiredTools(), null);
+                    "Tool '" + toolName + "' is not in the required-tool whitelist for goal '"
+                    + active.id() + "'", null);
             }
         }
 
@@ -69,13 +82,14 @@ public class GoalCoherencePlanValidator implements PlanValidator {
     }
 
     @Override
-    public ValidationResult validateAfterAction(ActionResult r, ExecutionContext ctx) {
-        if (!(r instanceof ActionResult.Success)) return new ValidationResult.Passed();
-        boolean rootFailed = ctx.goalStack().all().stream()
+    public ValidationResult validateAfterAction(ActionResult result, ExecutionContext ctx) {
+        Optional<Goal> rootOpt = ctx.goalStack().all().stream()
             .filter(g -> "root".equals(g.id()))
-            .anyMatch(g -> g.status() == GoalStatus.FAILED);
-        return rootFailed
-            ? new ValidationResult.NeedsCorrection("Root goal entered FAILED state after action", null)
-            : new ValidationResult.Passed();
+            .findFirst();
+        if (rootOpt.isPresent() && rootOpt.get().status() == GoalStatus.FAILED) {
+            return new ValidationResult.NeedsCorrection(
+                "Root goal has transitioned to FAILED after action", null);
+        }
+        return new ValidationResult.Passed();
     }
 }

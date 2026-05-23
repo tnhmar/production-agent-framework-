@@ -133,7 +133,8 @@ class StateMachineRunner {
 
                         // N1: stagnation detector — compare goal hash after cycle completes
                         String postGoalHash = hashGoalState(ctx.goalStack().all());
-                        if (preGoalHash.equals(postGoalHash) && isToolOrAnswer(decision)) {
+                        if (preGoalHash.equals(postGoalHash) && isToolOrAnswer(decision)
+                                && (ctx.cycleCount() + 1) < ctx.task().maxCycles()) {
                             ctx.incrementStagnantCycles();
                             if (ctx.stagnantCycles() >= MAX_STAGNANT_CYCLES) {
                                 ctx.setTerminationReason(new TerminationReason.Escalated(

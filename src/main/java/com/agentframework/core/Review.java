@@ -117,9 +117,9 @@ class Review {
             }
             case ActionResult.Failure f ->
                 taintClassifier.classify(f.message()); // error messages may carry injection text
-            case ActionResult.ValidationFailure __,
-                 ActionResult.Escalated __,
-                 ActionResult.Clarification __ -> TaintLabel.CLEAN;
+            case ActionResult.ValidationFailure v1 -> TaintLabel.CLEAN;
+            case ActionResult.Escalated         v2 -> TaintLabel.CLEAN;
+            case ActionResult.Clarification     v3 -> TaintLabel.CLEAN;
         };
     }
 

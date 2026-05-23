@@ -46,7 +46,7 @@ public class DefaultAction implements Action {
             case ToolCall tc         -> executeToolCall(tc, ctx);
             case ParallelToolCalls p -> executeParallel(p, ctx);
             case FinalAnswer fa      -> ActionResult.success(
-                new ToolResult(fa.content(), List.of(), 0, BigDecimal.ZERO, Duration.ZERO));
+                new ToolResult(fa.content(), List.of(), 0, BigDecimal.ZERO, Duration.ZERO, 0));
             case Escalate e          -> ActionResult.failure("ESCALATED", e.reason());
             case AskClarification q  -> ActionResult.failure("CLARIFY", q.question());
         };

@@ -1,100 +1,68 @@
 package com.agentframework.core;
 
 import com.agentframework.foundation.*;
+import java.util.List;
 import java.util.Optional;
 
 /**
- * Production {@link PlanValidator} that enforces goal coherence on every
- * decision cycle and after every world-changing action.
+ * Production {@link PlanValidator} enforcing goal coherence on every decision cycle.
  *
- * <p>Replaces {@link PassThroughPlanValidator} as the recommended default.
- * Wire it into {@link AgentRuntime} at construction time:
- * <pre>{@code
- *   new AgentRuntime(new GoalCoherencePlanValidator(), events);
- * }</pre>
- *
- * <h3>Checks performed before dispatch ({@link #validate})</h3>
- * <ol>
- *   <li><b>Root-goal liveness</b> — rejects decisions if the root goal is
- *       already COMPLETED or FAILED, stopping runaway agents that keep acting
- *       after finishing.</li>
- *   <li><b>Escalation / clarification pass-through</b> — recovery decisions
- *       are never blocked by this validator.</li>
- *   <li><b>Tool exclusion tokens</b> — if the current goal's
- *       {@code successCriteria} contains a {@code !toolName} token, that tool
- *       is blocked and the cycle is flagged for plan correction.  This is a
- *       lightweight policy hook; deeper semantic matching lives in
- *       {@code SemanticActionValidator}.</li>
- * </ol>
- *
- * <h3>After-action check ({@link #validateAfterAction})</h3>
- * <p>After a world-changing action, verifies the root goal has not
- * inadvertently entered FAILED state; if so, flags the plan as stale.
- *
- * <p>Designed for composition: wrap with additional validators via
- * {@link CompositePlanValidator} for policy and domain-specific checks.
+ * <ul>
+ *   <li>Blocks when root goal is COMPLETED or FAILED.</li>
+ *   <li>Escalation/clarification always pass through.</li>
+ *   <li>{@code !toolName} tokens in {@code successCriteria} block that tool.</li>
+ * </ul>
  */
 public class GoalCoherencePlanValidator implements PlanValidator {
 
     @Override
     public ValidationResult validate(Decision decision, ExecutionContext ctx) {
-        // Recovery paths must never be blocked
         if (decision instanceof Escalate || decision instanceof AskClarification)
             return new ValidationResult.Passed();
 
         Optional<Goal> root = ctx.goalStack().all().stream()
-            .filter(g -> "root".equals(g.id()))
-            .findFirst();
+            .filter(g -> "root".equals(g.id())).findFirst();
 
         if (root.isEmpty())
             return new ValidationResult.Failed(
-                "No root goal on stack — cannot validate decision coherence");
+                "No root goal on stack — cannot validate coherence", List.of());
 
-        GoalStatus rootStatus = root.get().status();
-        if (rootStatus == GoalStatus.COMPLETED)
+        GoalStatus status = root.get().status();
+        if (status == GoalStatus.COMPLETED)
             return new ValidationResult.Failed(
-                "Root goal already COMPLETED; no further actions permitted");
-        if (rootStatus == GoalStatus.FAILED)
+                "Root goal COMPLETED; no further actions permitted", List.of());
+        if (status == GoalStatus.FAILED)
             return new ValidationResult.Failed(
-                "Root goal is FAILED; decision rejected until goal stack is reset");
+                "Root goal FAILED; rejected until goal stack reset", List.of());
 
         if (decision instanceof FinalAnswer)
             return new ValidationResult.Passed();
 
         if (decision instanceof ToolCall tc) {
             Goal current = ctx.goalStack().current().orElse(root.get());
-            if (isExplicitlyExcluded(tc.toolName(), current))
+            if (isExcluded(tc.toolName(), current))
                 return new ValidationResult.NeedsCorrection(
-                    "Tool '" + tc.toolName() + "' is excluded by goal '" +
-                    current.id() + "' — choose an alternative approach");
+                    "Tool '" + tc.toolName() + "' excluded by goal '" +
+                    current.id() + "' — choose an alternative", null);
         }
-
         return new ValidationResult.Passed();
     }
 
     @Override
     public ValidationResult validateAfterAction(ActionResult result, ExecutionContext ctx) {
-        if (!(result instanceof ActionResult.Success))
-            return new ValidationResult.Passed();
-
+        if (!(result instanceof ActionResult.Success)) return new ValidationResult.Passed();
         boolean rootFailed = ctx.goalStack().all().stream()
             .filter(g -> "root".equals(g.id()))
             .anyMatch(g -> g.status() == GoalStatus.FAILED);
-
         return rootFailed
             ? new ValidationResult.NeedsCorrection(
-                "Root goal entered FAILED state after action — plan correction required")
+                "Root goal entered FAILED after action — plan correction required", null)
             : new ValidationResult.Passed();
     }
 
-    /**
-     * Returns {@code true} if the goal's success-criteria string contains
-     * a {@code !toolName} exclusion token (case-insensitive).
-     * Example criteria: "summarise the document !web_search !send_email"
-     */
-    private boolean isExplicitlyExcluded(String toolName, Goal goal) {
-        if (goal.successCriteria() == null || goal.successCriteria().isBlank()) return false;
-        return goal.successCriteria().toLowerCase()
-                   .contains("!" + toolName.toLowerCase());
+    private boolean isExcluded(String toolName, Goal goal) {
+        String c = goal.successCriteria();
+        return c != null && !c.isBlank()
+            && c.toLowerCase().contains("!" + toolName.toLowerCase());
     }
 }

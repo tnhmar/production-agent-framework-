@@ -72,11 +72,15 @@ public class FoundationTest {
         TerminationReason es = new TerminationReason.Escalated("too hard");
         TerminationReason rl = new TerminationReason.ResourceLimit("max tokens");
         TerminationReason fe = new TerminationReason.FailureEscalation("5 failures");
+        // All 7 permitted subtypes must be covered for exhaustive switch expression
         String r = switch (gc) {
-            case TerminationReason.GoalCompleted g   -> "done";
-            case TerminationReason.Escalated e       -> "escalated";
-            case TerminationReason.ResourceLimit l   -> "limit";
-            case TerminationReason.FailureEscalation f -> "fail";
+            case TerminationReason.GoalCompleted g      -> "done";
+            case TerminationReason.Escalated e          -> "escalated";
+            case TerminationReason.ResourceLimit l      -> "limit";
+            case TerminationReason.FailureEscalation f  -> "fail";
+            case TerminationReason.SecurityViolation sv -> "security";
+            case TerminationReason.StagnationLimit sl   -> "stagnation";
+            case TerminationReason.PlanIncoherent pi    -> "incoherent";
         };
         assertEquals("done", r, "GoalCompleted match");
     }
@@ -114,6 +118,7 @@ public class FoundationTest {
         assertEquals(0,Task.builder().instruction("x").maxChainDepth(0).build().maxChainDepth());
         assertThrows(IllegalArgumentException.class,()->Task.builder().instruction("x").maxChainDepth(-1).build());
     }
+
     @Test public void testCycleRecordRetryCount() {
         assertEquals(0,CycleRecord.of(1,null,new FinalAnswer("done",List.of()),null,"ok").retryCount());
     }

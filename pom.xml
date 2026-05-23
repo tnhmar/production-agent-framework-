@@ -2,53 +2,63 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
-                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
-  <modelVersion>4.0.0</modelVersion>
+             https://maven.apache.org/xsd/maven-4.0.0.xsd">
 
+  <modelVersion>4.0.0</modelVersion>
   <groupId>com.agentframework</groupId>
-  <artifactId>agent-framework</artifactId>
+  <artifactId>production-agent-framework</artifactId>
   <version>1.0.0-SNAPSHOT</version>
   <packaging>jar</packaging>
-  <name>AI Agent Framework</name>
-  <description>Production-grade AI agent framework -- merged architecture</description>
 
   <properties>
     <java.version>21</java.version>
-    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.source>${java.version}</maven.compiler.source>
+    <maven.compiler.target>${java.version}</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <junit.version>5.10.2</junit.version>
-    <jackson.version>2.17.1</jackson.version>
-    <surefire.version>3.2.5</surefire.version>
-    <jacoco.version>0.8.12</jacoco.version>
-    <checkstyle.version>3.3.1</checkstyle.version>
-    <spotbugs.version>4.8.3.1</spotbugs.version>
-    <enforcer.version>3.4.1</enforcer.version>
-    <source.version>3.3.0</source.version>
-    <javadoc.version>3.6.3</javadoc.version>
-    <!-- Quality gate thresholds: baseline; raise incrementally -->
-    <jacoco.line.coverage>0.65</jacoco.line.coverage>
-    <jacoco.branch.coverage>0.40</jacoco.branch.coverage>
-    <!-- Default: skip OWASP locally; CI overrides with -Ddependency-check.skip=false -->
-    <dependency-check.skip>true</dependency-check.skip>
+    <!-- Dependency versions -->
+    <micrometer.version>1.13.3</micrometer.version>
+    <opentelemetry.version>1.40.0</opentelemetry.version>
+    <junit.version>5.11.0</junit.version>
+    <mockito.version>5.12.0</mockito.version>
+    <checkstyle.version>10.18.1</checkstyle.version>
   </properties>
 
   <dependencies>
+
+    <!-- Micrometer core (metrics) -->
     <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <version>${jackson.version}</version>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-core</artifactId>
+      <version>${micrometer.version}</version>
     </dependency>
+
+    <!-- OpenTelemetry API (tracing) -->
     <dependency>
-      <groupId>com.fasterxml.jackson.datatype</groupId>
-      <artifactId>jackson-datatype-jsr310</artifactId>
-      <version>${jackson.version}</version>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-api</artifactId>
+      <version>${opentelemetry.version}</version>
     </dependency>
+
+    <!-- Test scope -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <version>${junit.version}</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <version>${mockito.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-test</artifactId>
+      <version>${micrometer.version}</version>
+      <scope>test</scope>
+    </dependency>
+
   </dependencies>
 
   <build>
@@ -58,82 +68,69 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.12.1</version>
+        <version>3.13.0</version>
         <configuration>
-          <release>21</release>
-          <compilerArgs>
-            <arg>-Xlint:all</arg>
-            <arg>-Xlint:-processing</arg>
-            <arg>-Xlint:-unchecked</arg>
-            <arg>-Xlint:-rawtypes</arg>
-          </compilerArgs>
+          <release>${java.version}</release>
+          <parameters>true</parameters>
         </configuration>
       </plugin>
 
-      <!-- Enforcer: Java 21+, Maven 3.9+, ban Log4Shell -->
+      <!-- Surefire (JUnit 5) -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-enforcer-plugin</artifactId>
-        <version>${enforcer.version}</version>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <useModulePath>false</useModulePath>
+        </configuration>
+      </plugin>
+
+      <!-- Checkstyle (CI-01): violations break the build -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <version>3.3.1</version>
+        <dependencies>
+          <dependency>
+            <groupId>com.puppycrawl.tools</groupId>
+            <artifactId>checkstyle</artifactId>
+            <version>${checkstyle.version}</version>
+          </dependency>
+        </dependencies>
         <executions>
           <execution>
-            <id>enforce</id>
-            <goals><goal>enforce</goal></goals>
+            <id>checkstyle-validate</id>
+            <phase>validate</phase>
+            <goals><goal>check</goal></goals>
             <configuration>
-              <rules>
-                <requireJavaVersion>
-                  <version>[21,)</version>
-                </requireJavaVersion>
-                <requireMavenVersion>
-                  <version>[3.9,)</version>
-                </requireMavenVersion>
-                <bannedDependencies>
-                  <excludes>
-                    <exclude>org.apache.logging.log4j:log4j-core:[2.0,2.17.1)</exclude>
-                  </excludes>
-                </bannedDependencies>
-              </rules>
+              <configLocation>google_checks.xml</configLocation>
+              <consoleOutput>true</consoleOutput>
+              <failsOnError>true</failsOnError>
+              <violationSeverity>warning</violationSeverity>
+              <includeTestSourceDirectory>false</includeTestSourceDirectory>
             </configuration>
           </execution>
         </executions>
       </plugin>
 
-      <!-- Surefire: unit tests with JaCoCo agent -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <version>${surefire.version}</version>
-        <configuration>
-          <includes>
-            <include>**/*Test.java</include>
-          </includes>
-          <rerunFailingTestsCount>1</rerunFailingTestsCount>
-          <argLine>@{jacoco.agent.argLine}</argLine>
-          <reportFormat>xml</reportFormat>
-        </configuration>
-      </plugin>
-
-      <!-- JaCoCo: coverage instrumentation + quality gate -->
+      <!-- JaCoCo (C3-01): 80% line / 75% branch -->
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
-        <version>${jacoco.version}</version>
-        <configuration>
-          <propertyName>jacoco.agent.argLine</propertyName>
-        </configuration>
+        <version>0.8.12</version>
         <executions>
           <execution>
-            <id>prepare-agent</id>
+            <id>jacoco-prepare</id>
             <goals><goal>prepare-agent</goal></goals>
           </execution>
           <execution>
-            <id>report</id>
-            <phase>verify</phase>
+            <id>jacoco-report</id>
+            <phase>test</phase>
             <goals><goal>report</goal></goals>
           </execution>
           <execution>
-            <id>check</id>
-            <phase>verify</phase>
+            <id>jacoco-check</id>
+            <phase>prepare-package</phase>
             <goals><goal>check</goal></goals>
             <configuration>
               <rules>
@@ -143,12 +140,12 @@
                     <limit>
                       <counter>LINE</counter>
                       <value>COVEREDRATIO</value>
-                      <minimum>${jacoco.line.coverage}</minimum>
+                      <minimum>0.80</minimum>
                     </limit>
                     <limit>
                       <counter>BRANCH</counter>
                       <value>COVEREDRATIO</value>
-                      <minimum>${jacoco.branch.coverage}</minimum>
+                      <minimum>0.75</minimum>
                     </limit>
                   </limits>
                 </rule>
@@ -158,120 +155,7 @@
         </executions>
       </plugin>
 
-      <!-- Checkstyle -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-checkstyle-plugin</artifactId>
-        <version>${checkstyle.version}</version>
-        <configuration>
-          <configLocation>checkstyle.xml</configLocation>
-          <failsOnError>true</failsOnError>
-          <consoleOutput>true</consoleOutput>
-          <includeTestSourceDirectory>false</includeTestSourceDirectory>
-        </configuration>
-        <executions>
-          <execution>
-            <id>checkstyle-check</id>
-            <phase>verify</phase>
-            <goals><goal>check</goal></goals>
-          </execution>
-        </executions>
-      </plugin>
-
-      <!-- SpotBugs -->
-      <plugin>
-        <groupId>com.github.spotbugs</groupId>
-        <artifactId>spotbugs-maven-plugin</artifactId>
-        <version>${spotbugs.version}</version>
-        <configuration>
-          <effort>Max</effort>
-          <threshold>Medium</threshold>
-          <failOnError>true</failOnError>
-          <xmlOutput>true</xmlOutput>
-          <sarifOutput>true</sarifOutput>
-        </configuration>
-        <executions>
-          <execution>
-            <id>spotbugs-check</id>
-            <phase>verify</phase>
-            <goals><goal>check</goal></goals>
-          </execution>
-        </executions>
-      </plugin>
-
-      <!-- OWASP Dependency-Check -->
-      <plugin>
-        <groupId>org.owasp</groupId>
-        <artifactId>dependency-check-maven</artifactId>
-        <version>10.0.3</version>
-        <configuration>
-          <failBuildOnCVSS>7</failBuildOnCVSS>
-          <format>ALL</format>
-          <outputDirectory>${project.build.directory}/dependency-check</outputDirectory>
-          <suppressionFile>dependency-check-suppressions.xml</suppressionFile>
-          <skip>${dependency-check.skip}</skip>
-        </configuration>
-        <executions>
-          <execution>
-            <id>dependency-check</id>
-            <phase>verify</phase>
-            <goals><goal>check</goal></goals>
-          </execution>
-        </executions>
-      </plugin>
-
-      <!-- Source JAR -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-source-plugin</artifactId>
-        <version>${source.version}</version>
-        <executions>
-          <execution>
-            <id>attach-sources</id>
-            <goals><goal>jar-no-fork</goal></goals>
-          </execution>
-        </executions>
-      </plugin>
-
-      <!-- Javadoc JAR -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-javadoc-plugin</artifactId>
-        <version>${javadoc.version}</version>
-        <configuration>
-          <doclint>none</doclint>
-          <quiet>true</quiet>
-        </configuration>
-        <executions>
-          <execution>
-            <id>attach-javadocs</id>
-            <goals><goal>jar</goal></goals>
-          </execution>
-        </executions>
-      </plugin>
-
     </plugins>
   </build>
-
-  <profiles>
-    <!-- Fast local feedback: skip slow analysis -->
-    <profile>
-      <id>fast</id>
-      <properties>
-        <checkstyle.skip>true</checkstyle.skip>
-        <spotbugs.skip>true</spotbugs.skip>
-        <dependency-check.skip>true</dependency-check.skip>
-      </properties>
-    </profile>
-    <!-- Full release pipeline: all gates enabled -->
-    <profile>
-      <id>release</id>
-      <properties>
-        <checkstyle.skip>false</checkstyle.skip>
-        <spotbugs.skip>false</spotbugs.skip>
-        <dependency-check.skip>false</dependency-check.skip>
-      </properties>
-    </profile>
-  </profiles>
 
 </project>

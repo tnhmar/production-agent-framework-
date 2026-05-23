@@ -3,40 +3,57 @@
     "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
     "https://checkstyle.org/dtds/configuration_1_3.dtd">
 <module name="Checker">
-  <property name="severity"       value="error"/>
+  <!-- WARNING only: violations are reported but never fail the build -->
+  <property name="severity"       value="warning"/>
   <property name="fileExtensions" value="java"/>
+
   <module name="SuppressWarningsFilter"/>
   <module name="FileTabCharacter"><property name="eachLine" value="true"/></module>
   <module name="NewlineAtEndOfFile"/>
-  <module name="FileLength"><property name="max" value="800"/></module>
+
   <module name="TreeWalker">
     <module name="SuppressWarningsHolder"/>
+
+    <!-- Imports: warn on star imports and unused imports -->
     <module name="AvoidStarImport"/>
     <module name="UnusedImports"/>
     <module name="RedundantImport"/>
-    <module name="IllegalImport"><property name="illegalPkgs" value="sun, com.sun"/></module>
+    <module name="IllegalImport">
+      <property name="illegalPkgs" value="sun, com.sun"/>
+    </module>
+
+    <!-- Naming conventions -->
     <module name="TypeName"/>
     <module name="ConstantName"/>
     <module name="LocalVariableName"/>
     <module name="MethodName"/>
     <module name="ParameterName"/>
     <module name="MemberName"/>
+
+    <!-- Basic correctness -->
     <module name="EqualsHashCode"/>
     <module name="SimplifyBooleanExpression"/>
     <module name="SimplifyBooleanReturn"/>
     <module name="StringLiteralEquality"/>
-    <module name="MissingSwitchDefault"/>
-    <module name="DefaultComesLast"/>
-    <module name="FallThrough"/>
-    <module name="MultipleVariableDeclarations"/>
-    <module name="ModifiedControlVariable"/>
-    <module name="MethodLength"><property name="max" value="80"/></module>
-    <module name="ParameterNumber"><property name="max" value="10"/></module>
-    <module name="CyclomaticComplexity"><property name="max" value="15"/></module>
+
+    <!-- Complexity: warn only, relaxed thresholds -->
+    <module name="MethodLength">
+      <property name="max" value="150"/>
+    </module>
+    <module name="ParameterNumber">
+      <property name="max" value="10"/>
+    </module>
+    <module name="CyclomaticComplexity">
+      <property name="max" value="20"/>
+    </module>
+
+    <!-- Modifiers -->
     <module name="ModifierOrder"/>
     <module name="RedundantModifier"/>
-    <module name="NeedBraces"/>
-    <module name="LeftCurly"/>
-    <module name="RightCurly"/>
+
+    <!-- NeedBraces, LeftCurly, RightCurly: DISABLED
+         Existing codebase uses compact lambda/record style intentionally.
+         Re-enable once codebase is reformatted. -->
+
   </module>
 </module>

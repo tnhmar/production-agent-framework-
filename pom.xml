@@ -25,24 +25,14 @@
     <enforcer.version>3.4.1</enforcer.version>
     <source.version>3.3.0</source.version>
     <javadoc.version>3.6.3</javadoc.version>
-    <!-- Quality gate thresholds -- baseline; raise incrementally -->
+    <!-- Quality gate thresholds: baseline; raise incrementally -->
     <jacoco.line.coverage>0.65</jacoco.line.coverage>
     <jacoco.branch.coverage>0.40</jacoco.branch.coverage>
+    <!-- Default: skip OWASP locally; CI overrides with -Ddependency-check.skip=false -->
+    <dependency-check.skip>true</dependency-check.skip>
   </properties>
 
   <dependencies>
-    <!-- JSON parsing for ReActStrategy, checkpointing, A2A payloads -->
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <version>${jackson.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.datatype</groupId>
-      <artifactId>jackson-datatype-jsr310</artifactId>
-      <version>${jackson.version}</version>
-    </dependency>
-
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
@@ -64,7 +54,7 @@
   <build>
     <plugins>
 
-      <!-- ── Compiler ─────────────────────────────────────────── -->
+      <!-- Compiler -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
@@ -80,7 +70,7 @@
         </configuration>
       </plugin>
 
-      <!-- ── Enforcer: Java 21+, Maven 3.9+, ban Log4Shell ────── -->
+      <!-- Enforcer: Java 21+, Maven 3.9+, ban Log4Shell -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
@@ -108,7 +98,7 @@
         </executions>
       </plugin>
 
-      <!-- ── Surefire: unit tests with JaCoCo agent ───────────── -->
+      <!-- Surefire: unit tests with JaCoCo agent -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
@@ -123,7 +113,7 @@
         </configuration>
       </plugin>
 
-      <!-- ── JaCoCo: coverage instrumentation + quality gate ──── -->
+      <!-- JaCoCo: coverage instrumentation + quality gate -->
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
@@ -168,7 +158,7 @@
         </executions>
       </plugin>
 
-      <!-- ── Checkstyle ───────────────────────────────────────── -->
+      <!-- Checkstyle -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-checkstyle-plugin</artifactId>
@@ -188,7 +178,7 @@
         </executions>
       </plugin>
 
-      <!-- ── SpotBugs ─────────────────────────────────────────── -->
+      <!-- SpotBugs -->
       <plugin>
         <groupId>com.github.spotbugs</groupId>
         <artifactId>spotbugs-maven-plugin</artifactId>
@@ -198,7 +188,7 @@
           <threshold>Medium</threshold>
           <failOnError>true</failOnError>
           <xmlOutput>true</xmlOutput>
-          <xmlOutputDirectory>${project.build.directory}/spotbugs</xmlOutputDirectory>
+          <sarifOutput>true</sarifOutput>
         </configuration>
         <executions>
           <execution>
@@ -209,7 +199,7 @@
         </executions>
       </plugin>
 
-      <!-- ── OWASP Dependency-Check (skipped by default) ──────── -->
+      <!-- OWASP Dependency-Check -->
       <plugin>
         <groupId>org.owasp</groupId>
         <artifactId>dependency-check-maven</artifactId>
@@ -230,7 +220,7 @@
         </executions>
       </plugin>
 
-      <!-- ── Source JAR ───────────────────────────────────────── -->
+      <!-- Source JAR -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-source-plugin</artifactId>
@@ -243,7 +233,7 @@
         </executions>
       </plugin>
 
-      <!-- ── Javadoc JAR ──────────────────────────────────────── -->
+      <!-- Javadoc JAR -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-javadoc-plugin</artifactId>

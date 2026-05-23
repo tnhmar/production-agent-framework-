@@ -3,6 +3,7 @@ package com.agentframework.core;
 import com.agentframework.foundation.*;
 import com.agentframework.observability.*;
 import com.agentframework.security.TaintClassifier;
+
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -10,31 +11,37 @@ import java.util.UUID;
 /**
  * Post-action review step executed inside each PLANNING cycle.
  *
- * <p>Key responsibility added here: every {@link ActionResult} written to working
- * memory is classified by {@link TaintClassifier} <em>before</em> the write.
- * Tool output is tagged {@link TaintLabel#EXTERNAL} by default; payloads matching
- * known injection patterns are tagged {@link TaintLabel#HOSTILE}, which will block
- * further tool dispatch via {@code TaintActionValidator} on the next cycle.
+ * <p>All collaborators are constructor-injected. In particular:
+ * <ul>
+ *   <li>{@link TaintClassifier} is injected, not constructed inline, so callers
+ *       can share a single instance with pre-compiled pattern lists.</li>
+ *   <li>{@link ContextWindowManager} is injected to allow limit overrides in tests.</li>
+ * </ul>
  *
- * <p>Internal results (validation failures, clarifications, escalations) are
- * system-generated and remain {@link TaintLabel#CLEAN}.
+ * <p>Package-private — instantiated only by {@link StateMachineRunner}.
  */
 class Review {
-    private final PlanValidator   validator;
-    private final EventSink       events;
-    private final TaintClassifier taintClassifier;
-    private static final int      MAX_FAILURES = 3;
 
-    /** Production constructor — uses shared TaintClassifier instance. */
-    Review(PlanValidator validator, EventSink events) {
-        this(validator, events, new TaintClassifier());
+    private final PlanValidator       validator;
+    private final EventSink           events;
+    private final TaintClassifier     taintClassifier;
+    private final ContextWindowManager ctxManager;
+
+    private static final int MAX_FAILURES = 3;
+
+    /** Minimal constructor used by the default {@link StateMachineRunner}. */
+    Review(PlanValidator validator, EventSink events,
+           TaintClassifier taintClassifier) {
+        this(validator, events, taintClassifier, new ContextWindowManager());
     }
 
-    /** Testable constructor — allows injecting a custom TaintClassifier. */
-    Review(PlanValidator validator, EventSink events, TaintClassifier taintClassifier) {
-        this.validator       = validator;
-        this.events          = events;
-        this.taintClassifier = taintClassifier;
+    /** Full constructor — all dependencies injected. */
+    Review(PlanValidator validator, EventSink events,
+           TaintClassifier taintClassifier, ContextWindowManager ctxManager) {
+        this.validator        = validator;
+        this.events           = events;
+        this.taintClassifier  = taintClassifier;
+        this.ctxManager       = ctxManager;
     }
 
     void step(ActionResult result, Decision decision, Observations obs,
@@ -55,16 +62,16 @@ class Review {
                 Map.of("summary", summary.substring(0, Math.min(200, summary.length())))));
         }
 
-        // 2. Evict if context window is getting full
-        new ContextWindowManager().manage(ctx.workingMemory(), ctx.task().maxTokens());
+        // 2. Context-window management (injected — no inline construction)
+        ctxManager.manage(ctx.workingMemory(), ctx.task().maxTokens());
 
-        // 3. Update goal stack based on decision outcome
+        // 3. Update goal stack
         updateGoals(result, decision, ctx);
 
         // 4. Update belief state
         updateBeliefs(result, ctx);
 
-        // 5. Memory write-back via agent's long-term memory
+        // 5. Long-term memory write-back for world-changing actions
         if (result instanceof ActionResult.Success s && s.result().indicatesWorldChange()) {
             try {
                 agent.memory().write(
@@ -81,7 +88,9 @@ class Review {
             if (reval instanceof ValidationResult.NeedsCorrection nc) {
                 ctx.incrementRevisionCount();
                 if (ctx.isRevisionBudgetExceeded(3)) {
-                    ctx.setTerminationReason(new TerminationReason.Escalated("Revision budget exhausted"));
+                    ctx.setTerminationReason(
+                        new TerminationReason.PlanIncoherent(
+                            "Revision budget exhausted: " + nc.reason()));
                     ctx.transitionTo(RunState.TERMINATED);
                 } else {
                     ctx.flagPlanStale(nc.reason());
@@ -98,25 +107,15 @@ class Review {
         }
     }
 
-    /**
-     * Derives the taint label for the result being written to working memory.
-     *
-     * <ul>
-     *   <li>Success / Failure — external data; classify the payload content.</li>
-     *   <li>PartialSuccess — hostile if ANY individual result is hostile.</li>
-     *   <li>ValidationFailure / Escalated / Clarification — system-generated; CLEAN.</li>
-     * </ul>
-     */
     private TaintLabel classifyResultTaint(ActionResult result) {
         return switch (result) {
-            case ActionResult.Success s -> taintClassifier.classifyObject(s.result().data());
+            case ActionResult.Success s      -> taintClassifier.classifyObject(s.result().data());
             case ActionResult.PartialSuccess ps -> {
                 boolean anyHostile = ps.results().stream()
                     .anyMatch(r -> taintClassifier.classifyObject(r.data()) == TaintLabel.HOSTILE);
                 yield anyHostile ? TaintLabel.HOSTILE : TaintLabel.EXTERNAL;
             }
-            case ActionResult.Failure f ->
-                taintClassifier.classify(f.message()); // error messages may carry injection text
+            case ActionResult.Failure f      -> taintClassifier.classify(f.message());
             case ActionResult.ValidationFailure v1 -> TaintLabel.CLEAN;
             case ActionResult.Escalated         v2 -> TaintLabel.CLEAN;
             case ActionResult.Clarification     v3 -> TaintLabel.CLEAN;
@@ -136,7 +135,8 @@ class Review {
                 }
             }
             case FinalAnswer fa -> goals.updateStatus("root", GoalStatus.COMPLETED);
-            case Escalate e     -> goals.current().ifPresent(g -> goals.updateStatus(g.id(), GoalStatus.FAILED));
+            case Escalate e     -> goals.current().ifPresent(
+                    g -> goals.updateStatus(g.id(), GoalStatus.FAILED));
             default -> {}
         }
     }
@@ -145,8 +145,8 @@ class Review {
         if (!(result instanceof ActionResult.Success s)) return;
         String value = s.result().data() != null ? s.result().data().toString() : "null";
         Belief incoming = new Belief(UUID.randomUUID().toString(),
-            "last_tool_result", "equals", value,
-            0.8, "tool_result", Instant.now(), false);
+            "last_tool_result", "equals", value, 0.8,
+            "tool_result", Instant.now(), false);
         Belief won = ctx.beliefState().assertBelief(incoming);
         if (won.conflicted())
             events.emit(new AgentEvent(ctx.runId(), ctx.tenantId(),
@@ -154,7 +154,8 @@ class Review {
                 Map.of("key", won.subject() + "|" + won.predicate())));
     }
 
-    private TerminationReason checkTermination(ActionResult result, Decision decision, ExecutionContext ctx) {
+    private TerminationReason checkTermination(
+            ActionResult result, Decision decision, ExecutionContext ctx) {
         if (ctx.goalStack().isRootAchieved()) return new TerminationReason.GoalCompleted();
         if (decision instanceof Escalate e)   return new TerminationReason.Escalated(e.reason());
         if (decision instanceof FinalAnswer)   return new TerminationReason.GoalCompleted();
@@ -164,7 +165,8 @@ class Review {
         if (isFailure) {
             ctx.incrementConsecutiveFailures();
             if (ctx.consecutiveFailures() >= MAX_FAILURES)
-                return new TerminationReason.FailureEscalation("Too many consecutive failures");
+                return new TerminationReason.FailureEscalation(
+                    "Consecutive failure threshold reached (" + MAX_FAILURES + ")");
         } else {
             ctx.resetConsecutiveFailures();
         }
@@ -173,10 +175,11 @@ class Review {
 
     private String summarize(ActionResult r) {
         return switch (r) {
-            case ActionResult.Success s ->
-                "SUCCESS: " + (s.result().data() != null
-                    ? s.result().data().toString().substring(0, Math.min(200, s.result().data().toString().length()))
-                    : "null");
+            case ActionResult.Success s -> {
+                String data = s.result().data() != null
+                    ? s.result().data().toString() : "null";
+                yield "SUCCESS: " + data.substring(0, Math.min(200, data.length()));
+            }
             case ActionResult.Failure f            -> "FAILURE[" + f.errorCode() + "]: " + f.message();
             case ActionResult.ValidationFailure vf -> "VALIDATION_FAILURE: " + vf.verdict();
             case ActionResult.PartialSuccess ps    -> "PARTIAL: " + ps.results().size() + " ok, " + ps.errors().size() + " err";

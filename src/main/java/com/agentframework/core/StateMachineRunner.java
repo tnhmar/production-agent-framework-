@@ -2,6 +2,8 @@ package com.agentframework.core;
 
 import com.agentframework.foundation.*;
 import com.agentframework.observability.*;
+import com.agentframework.security.TaintClassifier;
+
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -9,10 +11,10 @@ import java.util.UUID;
 /**
  * Drives the agent through its {@link RunState} machine.
  *
- * <p>This class has a single responsibility: state-transition orchestration.
- * All liveness judgements (stagnation and stuck-state detection) are delegated
- * to an injected {@link LivenessDetector}.  All taint classification is handled
- * inside {@link Review}.
+ * <p>Single responsibility: state-transition orchestration.
+ * Liveness detection is delegated to {@link LivenessDetector}.
+ * Taint classification is delegated to {@link TaintClassifier} (injected,
+ * single shared instance per runner to preserve compiled pattern state).
  *
  * <h3>State machine</h3>
  * <pre>
@@ -20,25 +22,25 @@ import java.util.UUID;
  *               ↪ (on limit)   → TOOL_EXECUTION → MEMORY_UPDATE
  *                               → TERMINATED / COMPLETED / ABORTED
  * </pre>
- *
- * <p>SUSPENDED_HITL and WAITING_FOR_JOB are handled by
- * {@link com.agentframework.hitl.AsyncAgentRuntime} — this synchronous
- * runner does not block on human input.
  */
 class StateMachineRunner {
 
     private final PlanValidator    validator;
     private final EventSink        events;
     private final LivenessDetector liveness;
+    private final TaintClassifier  taintClassifier;
 
+    /** Default constructor: creates one TaintClassifier per runner instance. */
     StateMachineRunner(PlanValidator validator, EventSink events) {
-        this(validator, events, new DefaultLivenessDetector());
+        this(validator, events, new DefaultLivenessDetector(), new TaintClassifier());
     }
 
-    StateMachineRunner(PlanValidator validator, EventSink events, LivenessDetector liveness) {
-        this.validator = validator;
-        this.events    = events;
-        this.liveness  = liveness;
+    StateMachineRunner(PlanValidator validator, EventSink events,
+                       LivenessDetector liveness, TaintClassifier taintClassifier) {
+        this.validator       = validator;
+        this.events          = events;
+        this.liveness        = liveness;
+        this.taintClassifier = taintClassifier;
     }
 
     void run(Agent agent, ExecutionContext ctx) {
@@ -90,9 +92,11 @@ class StateMachineRunner {
                     ctx.flagPlanStale(null);
                     emit(ctx, AgentEvent.EventType.PLAN_STALE, Map.of());
                 }
-                emit(ctx, AgentEvent.EventType.CYCLE_STARTED, Map.of("cycle", ctx.cycleCount()));
+                emit(ctx, AgentEvent.EventType.CYCLE_STARTED,
+                    Map.of("cycle", ctx.cycleCount()));
 
-                String preGoalHash = DefaultLivenessDetector.hashGoalState(ctx.goalStack().all());
+                String preGoalHash = DefaultLivenessDetector.hashGoalState(
+                    ctx.goalStack().all());
 
                 Observations obs      = agent.perception().perceive(ctx);
                 ctx.transitionTo(RunState.MODEL_CALL);
@@ -101,7 +105,8 @@ class StateMachineRunner {
 
                 // N2: stuck-state check
                 liveness.checkStuck(decision, ctx).ifPresent(reason -> {
-                    terminate(ctx, reason, AgentEvent.EventType.STUCK_STATE_DETECTED,
+                    terminate(ctx, reason,
+                        AgentEvent.EventType.STUCK_STATE_DETECTED,
                         Map.of("cycles", ctx.stuckCycles(),
                                "lastDecision", decision.getClass().getSimpleName()));
                 });
@@ -114,17 +119,19 @@ class StateMachineRunner {
                         ctx.transitionTo(RunState.TOOL_EXECUTION);
                         ActionResult result = agent.action().execute(decision, ctx);
                         ctx.transitionTo(RunState.MEMORY_UPDATE);
-                        new Review(validator, events).step(result, decision, obs, ctx, agent);
+                        // Pass injected taintClassifier — not constructed inline
+                        new Review(validator, events, taintClassifier)
+                            .step(result, decision, obs, ctx, agent);
                         if (!ctx.currentState().isLive()) return;
 
                         // N1: stagnation check
-                        String postGoalHash = DefaultLivenessDetector.hashGoalState(ctx.goalStack().all());
+                        String postGoalHash = DefaultLivenessDetector.hashGoalState(
+                            ctx.goalStack().all());
                         liveness.checkStagnation(preGoalHash, postGoalHash, decision, ctx)
-                            .ifPresent(reason -> {
-                                terminate(ctx, reason, AgentEvent.EventType.GOAL_STAGNATION_DETECTED,
-                                    Map.of("cycles", ctx.stagnantCycles(),
-                                           "goalHash", postGoalHash));
-                            });
+                            .ifPresent(reason -> terminate(ctx, reason,
+                                AgentEvent.EventType.GOAL_STAGNATION_DETECTED,
+                                Map.of("cycles", ctx.stagnantCycles(),
+                                       "goalHash", postGoalHash)));
                         if (!ctx.currentState().isLive()) return;
 
                         ctx.recordCycle(CycleRecord.of(
@@ -132,7 +139,8 @@ class StateMachineRunner {
                         ctx.incrementCycle();
                         emit(ctx, AgentEvent.EventType.CYCLE_COMPLETED,
                             Map.of("cycle", ctx.cycleCount()));
-                        if (!ctx.currentState().isTerminal()) ctx.transitionTo(RunState.VALIDATING);
+                        if (!ctx.currentState().isTerminal())
+                            ctx.transitionTo(RunState.VALIDATING);
                     }
 
                     case ValidationResult.NeedsCorrection nc -> {
@@ -157,8 +165,6 @@ class StateMachineRunner {
             }
 
             case SUSPENDED_HITL, WAITING_FOR_JOB -> {
-                // Synchronous runner cannot block on human input.
-                // AsyncAgentRuntime handles these states via ExecutionStore.
                 terminate(ctx,
                     new TerminationReason.Escalated(
                         "State " + ctx.currentState() + " requires AsyncAgentRuntime."),
@@ -199,7 +205,8 @@ class StateMachineRunner {
         emit(ctx, eventType, attrs);
     }
 
-    private void emit(ExecutionContext ctx, AgentEvent.EventType type, Map<String, Object> attrs) {
+    private void emit(ExecutionContext ctx, AgentEvent.EventType type,
+                      Map<String, Object> attrs) {
         events.emit(new AgentEvent(
             ctx.runId(), ctx.tenantId(), type, Instant.now(), attrs));
     }

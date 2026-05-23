@@ -4,14 +4,37 @@ import com.agentframework.foundation.*;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
+/**
+ * Default, in-process implementation of {@link ExecutionContext}.
+ *
+ * <h3>Snapshot integrity</h3>
+ * The SHA-256 hash stored in every {@link FullSnapshot} covers:
+ * <ul>
+ *   <li>Run identity: {@code runId}, {@code state}, {@code cycle}</li>
+ *   <li>Goals: {@code id:status} for every goal on the stack</li>
+ *   <li>Working memory: {@code id:contentHash} for every entry
+ *       (content is included so payload tampering is detected)</li>
+ *   <li>Beliefs: {@code subject:predicate:valueHash:confidence} for every belief
+ *       (values and confidence are included so silent updates are detected)</li>
+ *   <li>Liveness counters: {@code consFailures}, {@code stagnantCycles},
+ *       {@code stuckCycles}, {@code revisions}</li>
+ *   <li>Accumulators: {@code totalTokens}, {@code totalCost}</li>
+ * </ul>
+ *
+ * <p>{@link NoSuchAlgorithmException} from SHA-256 throws
+ * {@link IllegalStateException} — SHA-256 is mandated by the JVM spec; its
+ * absence indicates a non-compliant environment and must fail fast rather than
+ * silently returning a dummy string that would defeat integrity verification.
+ */
 public class DefaultExecutionContext implements ExecutionContext {
 
-    public static final String SNAPSHOT_SCHEMA_VERSION = "1.0";
+    public static final String SNAPSHOT_SCHEMA_VERSION = "1.1";
 
     private final String         runId     = UUID.randomUUID().toString();
     private final RequestContext reqCtx;
@@ -24,7 +47,6 @@ public class DefaultExecutionContext implements ExecutionContext {
     private int        revisions    = 0;
     private boolean    planStale    = false;
     private String     stalenessHint;
-    // Liveness counters (N1 + N2)
     private int        stagnantCycles = 0;
     private int        stuckCycles    = 0;
 
@@ -40,12 +62,11 @@ public class DefaultExecutionContext implements ExecutionContext {
     public DefaultExecutionContext(Task task, String tenantId, String userId) {
         this.task   = Objects.requireNonNull(task, "task must not be null");
         Objects.requireNonNull(tenantId,
-            "tenantId must not be null — pass an explicit tenant ID. " +
-            "Use TenantPolicy.permissive(tenantId) to register an unrestricted policy.");
+            "tenantId must not be null — pass an explicit tenant ID.");
         this.reqCtx = RequestContext.of(tenantId, userId != null ? userId : "system");
     }
 
-    // ── Core accessors ───────────────────────────────────────────────────────
+    // ── Core accessors ───────────────────────────────────────────────
     public String         runId()              { return runId; }
     public String         tenantId()           { return reqCtx.tenantId(); }
     public Instant        startTime()          { return startTime; }
@@ -62,7 +83,7 @@ public class DefaultExecutionContext implements ExecutionContext {
     public void  incrementChainDepth()         { chainDepth++; }
     public void  resetChainDepth()             { chainDepth = 0; }
 
-    // ── Liveness counters ────────────────────────────────────────────────────
+    // ── Liveness counters ───────────────────────────────────────────
     public int  stagnantCycles()          { return stagnantCycles; }
     public void incrementStagnantCycles() { stagnantCycles++; }
     public void resetStagnantCycles()     { stagnantCycles = 0; }
@@ -70,12 +91,12 @@ public class DefaultExecutionContext implements ExecutionContext {
     public void incrementStuckCycles()    { stuckCycles++; }
     public void resetStuckCycles()        { stuckCycles = 0; }
 
-    // ── Goal / memory / belief ───────────────────────────────────────────────
+    // ── Goal / memory / belief ──────────────────────────────────────
     public GoalStack     goalStack()     { return goalStack; }
     public WorkingMemory workingMemory() { return workingMemory; }
     public BeliefState   beliefState()   { return beliefState; }
 
-    // ── Revision / plan staleness ────────────────────────────────────────────
+    // ── Revision / plan staleness ──────────────────────────────────
     public int     revisionCount()             { return revisions; }
     public void    incrementRevisionCount()    { revisions++; }
     public boolean isRevisionBudgetExceeded(int max) { return revisions > max; }
@@ -83,7 +104,7 @@ public class DefaultExecutionContext implements ExecutionContext {
     public boolean isPlanStale()               { return planStale; }
     public String  stalenessHint()             { return stalenessHint; }
 
-    // ── Jobs / trace / resources ─────────────────────────────────────────────
+    // ── Jobs / trace / resources ────────────────────────────────────
     public Map<String, JobToken> activeJobs()  { return activeJobs; }
     public void    recordCycle(CycleRecord r)  { trace.add(r); }
     public List<CycleRecord> trace()           { return new ArrayList<>(trace); }
@@ -94,70 +115,118 @@ public class DefaultExecutionContext implements ExecutionContext {
     public Optional<TerminationReason> terminationReason() { return Optional.ofNullable(terminationReason); }
     public void setTerminationReason(TerminationReason r)  { terminationReason = r; }
 
-    // ── Checkpoint ───────────────────────────────────────────────────────────
+    // ── Checkpoint ────────────────────────────────────────────────
+    @Override
     public Snapshot checkpoint() {
         List<Goal>               goals   = goalStack.all();
         List<WorkingMemoryEntry> wm      = workingMemory.getAll();
         List<Belief>             beliefs = beliefState.all(0.0);
-        String hash = computeHash(runId, state, cycle, goals, wm, beliefs, totalTokens, totalCost);
+        String hash = computeHash(
+            runId, state, cycle,
+            goals, wm, beliefs,
+            totalTokens, totalCost,
+            consFailures, stagnantCycles, stuckCycles, revisions);
         return new FullSnapshot(
             runId, state, cycle,
             SNAPSHOT_SCHEMA_VERSION,
-            Collections.unmodifiableList(goals),
-            Collections.unmodifiableList(wm),
-            Collections.unmodifiableList(beliefs),
-            totalTokens, totalCost, hash);
+            Collections.unmodifiableList(new ArrayList<>(goals)),
+            Collections.unmodifiableList(new ArrayList<>(wm)),
+            Collections.unmodifiableList(new ArrayList<>(beliefs)),
+            totalTokens, totalCost,
+            consFailures, stagnantCycles, stuckCycles, revisions,
+            hash);
     }
 
     /**
-     * Restores mutable execution state from a previously persisted snapshot.
+     * Restores all mutable execution state from a persisted snapshot.
      * Called by {@code AgentRuntime.replay()} before handing the context to the
      * state machine runner.
      *
-     * <p>The following fields are restored: cycle counter, state, goal stack,
-     * working memory, belief state, token / cost accumulators.  The run ID and
-     * start time are <em>not</em> overwritten — the replay run has its own identity.
+     * <p>All fields that influence agent behaviour are restored, including
+     * liveness counters.  The {@code runId} and {@code startTime} are deliberately
+     * not overwritten — the replay run has its own identity and timestamp.
      */
     public void restoreFromSnapshot(Snapshot snap) {
-        this.cycle       = snap.cycle();
-        this.state       = snap.state();
-        this.totalTokens = snap.totalTokens();
-        this.totalCost   = snap.totalCost();
+        this.cycle        = snap.cycle();
+        this.state        = snap.state();
+        this.totalTokens  = snap.totalTokens();
+        this.totalCost    = snap.totalCost();
+        this.consFailures = snap.consecutiveFailures();
+        this.stagnantCycles = snap.stagnantCycles();
+        this.stuckCycles    = snap.stuckCycles();
+        this.revisions      = snap.revisionCount();
         snap.goalStackSnapshot().forEach(goalStack::push);
         snap.workingMemorySnapshot().forEach(workingMemory::add);
         snap.beliefSnapshot().forEach(beliefState::assertBelief);
     }
 
-    // ── Static hash helper (also used by AgentRuntime for replay verification) ─
+    // ── Static hash helpers (also used by AgentRuntime for replay verification) ─
+
     public static String computeSnapshotHash(Snapshot snap) {
         return computeHash(
             snap.runId(), snap.state(), snap.cycle(),
             snap.goalStackSnapshot(),
             snap.workingMemorySnapshot(),
             snap.beliefSnapshot(),
-            snap.totalTokens(), snap.totalCost());
+            snap.totalTokens(), snap.totalCost(),
+            snap.consecutiveFailures(), snap.stagnantCycles(),
+            snap.stuckCycles(), snap.revisionCount());
     }
 
-    private static String computeHash(String runId, RunState state, int cycle,
+    private static String computeHash(
+            String runId, RunState state, int cycle,
             List<Goal> goals, List<WorkingMemoryEntry> wm,
-            List<Belief> beliefs, int tokens, BigDecimal cost) {
+            List<Belief> beliefs, int tokens, BigDecimal cost,
+            int consFailures, int stagnantCycles, int stuckCycles, int revisions) {
+        // SHA-256 is mandated by the Java Security spec. NoSuchAlgorithmException
+        // means the JVM is non-compliant; we must not silently degrade.
         try {
             String canonical = runId + "|" + state + "|" + cycle
-                + "|goals=" + goals.stream().map(g -> g.id() + ":" + g.status()).collect(Collectors.joining(","))
-                + "|wm="    + wm.stream().map(WorkingMemoryEntry::id).collect(Collectors.joining(","))
-                + "|beliefs=" + beliefs.stream().map(b -> b.subject() + ":" + b.predicate()).collect(Collectors.joining(","))
-                + "|tokens=" + tokens + "|cost=" + cost.toPlainString();
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(canonical.getBytes(StandardCharsets.UTF_8));
+                + "|goals=" + goals.stream()
+                    .map(g -> g.id() + ":" + g.status())
+                    .collect(Collectors.joining(","))
+                + "|wm=" + wm.stream()
+                    .map(e -> e.id() + ":" + contentHash(e.content()))
+                    .collect(Collectors.joining(","))
+                + "|beliefs=" + beliefs.stream()
+                    .map(b -> b.subject() + ":" + b.predicate()
+                        + ":" + contentHash(b.value())
+                        + ":" + b.confidence())
+                    .collect(Collectors.joining(","))
+                + "|liveness=" + consFailures + ":" + stagnantCycles
+                    + ":" + stuckCycles + ":" + revisions
+                + "|tokens=" + tokens
+                + "|cost=" + cost.toPlainString();
+
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                .digest(canonical.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder(64);
             for (byte b : digest) sb.append(String.format("%02x", b));
             return sb.toString();
-        } catch (Exception e) {
-            return "hash-unavailable";
+
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(
+                "SHA-256 algorithm unavailable — JVM environment is non-compliant. "
+                + "This indicates a missing security provider or a stripped-down JRE.", e);
         }
     }
 
-    // ── FullSnapshot record ──────────────────────────────────────────────────
+    /** Stable content fingerprint using SHA-256; falls back to identity hash on null. */
+    private static String contentHash(Object obj) {
+        if (obj == null) return "null";
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                .digest(obj.toString().getBytes(StandardCharsets.UTF_8));
+            // 8-hex-char prefix is sufficient for within-snapshot collision resistance
+            StringBuilder sb = new StringBuilder(8);
+            for (int i = 0; i < 4; i++) sb.append(String.format("%02x", digest[i]));
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
+    // ── FullSnapshot record ────────────────────────────────────────────
     record FullSnapshot(
         String                   runId,
         RunState                 state,
@@ -168,6 +237,10 @@ public class DefaultExecutionContext implements ExecutionContext {
         List<Belief>             beliefSnapshot,
         int                      totalTokens,
         BigDecimal               totalCost,
+        int                      consecutiveFailures,
+        int                      stagnantCycles,
+        int                      stuckCycles,
+        int                      revisionCount,
         String                   integrityHash
     ) implements Snapshot {}
 }

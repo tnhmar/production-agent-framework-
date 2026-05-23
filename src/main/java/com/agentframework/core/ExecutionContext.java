@@ -8,8 +8,10 @@ import java.util.*;
 /**
  * Per-run execution context threaded through the entire agent lifecycle.
  *
- * <p>Extended with liveness counters ({@code stagnantCycles}, {@code stuckCycles})
- * required by the stagnation and stuck-state detectors in {@link StateMachineRunner}.
+ * <p>The {@link Snapshot} inner interface includes liveness counters so that
+ * the SHA-256 integrity hash covers all fields that influence agent behaviour.
+ * Any tampering with liveness counters (e.g. resetting consecutiveFailures to 0
+ * to evade early-termination guards) is detected during replay verification.
  */
 public interface ExecutionContext {
     String         runId();
@@ -30,18 +32,12 @@ public interface ExecutionContext {
     void incrementChainDepth();
     void resetChainDepth();
 
-    // ── Liveness counters (N1 + N2) ─────────────────────────────────────────
-    /** Cycles where the goal-state hash was identical to the previous cycle. */
     int  stagnantCycles();
     void incrementStagnantCycles();
     void resetStagnantCycles();
-
-    /** Cycles where the decision was neither a ToolCall, ParallelToolCalls,
-     *  FinalAnswer, nor Escalate — i.e. the agent produced no forward progress. */
     int  stuckCycles();
     void incrementStuckCycles();
     void resetStuckCycles();
-    // ────────────────────────────────────────────────────────────────────────
 
     GoalStack     goalStack();
     WorkingMemory workingMemory();
@@ -71,9 +67,11 @@ public interface ExecutionContext {
 
     /**
      * Full, schema-versioned checkpoint snapshot.
-     * Contains all state required for deterministic resume:
-     * run ID, step index, state, goal stack, working memory entries,
-     * beliefs, token/cost accumulators, and a SHA-256 integrity hash.
+     *
+     * <p>Every field that influences agent behaviour during a run is included
+     * so the SHA-256 integrity hash can detect any mutation — including
+     * modifications to working-memory content, belief values, and liveness
+     * counters.
      */
     interface Snapshot {
         String                   runId();
@@ -85,6 +83,11 @@ public interface ExecutionContext {
         List<Belief>             beliefSnapshot();
         int                      totalTokens();
         BigDecimal               totalCost();
+        // Liveness counters — must be part of the integrity hash
+        int                      consecutiveFailures();
+        int                      stagnantCycles();
+        int                      stuckCycles();
+        int                      revisionCount();
         String                   integrityHash();
     }
 }

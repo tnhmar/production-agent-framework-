@@ -9,6 +9,7 @@ import com.agentframework.foundation.*;
 import com.agentframework.reasoning.*;
 import com.agentframework.reasoning.strategy.ReActStrategy;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -177,9 +178,11 @@ public class ReasoningTest {
         Task task = Task.builder().instruction("do X").build();
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t1", "u1");
 
-        // TrustTier values: HIGH, MEDIUM, LOW, UNTRUSTED — no TRUSTED constant
+        // Observation(content, origin, trustTier, timestamp, sourceReference)
+        // TrustTier values: HIGH, MEDIUM, LOW, UNTRUSTED
         Observations obs = Observations.of(List.of(
-                new Observation("env", Origin.USER, TrustTier.HIGH, "hello")));
+                new Observation("hello", Origin.USER, TrustTier.HIGH,
+                        Instant.now(), "env")));
 
         Prompt prompt = pb.build(ctx, obs, new ReActStrategy());
 

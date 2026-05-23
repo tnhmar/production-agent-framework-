@@ -117,7 +117,6 @@ public class ReasoningTest {
     @Test
     public void testParseEmptyObjectUnknownType() {
         Decision d = strategy.parse("{}");
-        // empty object has no 'type', falls through to default -> Escalate
         assertInstanceOf(Escalate.class, d, "empty object -> Escalate (unknown type)");
     }
 
@@ -148,7 +147,6 @@ public class ReasoningTest {
                 + "\"arguments\":{\"ids\":[\"a\",\"b\"]},\"reasoning_trace\":\"\"}";
         Decision d = strategy.parse(json);
         assertInstanceOf(ToolCall.class, d);
-        // Array is serialised as a JSON string representation
         assertTrue(((ToolCall) d).arguments().get("ids").toString().contains("a"),
                 "array arg serialised and retrievable");
     }
@@ -164,7 +162,6 @@ public class ReasoningTest {
 
     @Test
     public void testParseEscalateContentFallbackWhenNoReasoningTrace() {
-        // reasoning_trace absent; content present — firstNonNull must pick content
         String json = "{\"type\":\"escalate\",\"content\":\"too risky\"}";
         Decision d = strategy.parse(json);
         assertInstanceOf(Escalate.class, d);
@@ -180,8 +177,9 @@ public class ReasoningTest {
         Task task = Task.builder().instruction("do X").build();
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t1", "u1");
 
+        // TrustTier values: HIGH, MEDIUM, LOW, UNTRUSTED — no TRUSTED constant
         Observations obs = Observations.of(List.of(
-                new Observation("env", Origin.USER, TrustTier.TRUSTED, "hello")));
+                new Observation("env", Origin.USER, TrustTier.HIGH, "hello")));
 
         Prompt prompt = pb.build(ctx, obs, new ReActStrategy());
 

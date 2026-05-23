@@ -18,7 +18,7 @@ public class RagTest {
     // ── Stubs ────────────────────────────────────────────────────────────────
 
     static class StubVectorStore implements VectorStore {
-        private final List<Neighbor>    neighbors;
+        private final List<Neighbor>     neighbors;
         private final Map<String,String> payloads;
 
         StubVectorStore(List<Neighbor> neighbors, Map<String,String> payloads) {
@@ -59,12 +59,13 @@ public class RagTest {
         BasicRagService svc = new BasicRagService(
                 new StubVectorStore(neighbors, payloads), new StubRelStore(), embedFn());
 
-        List<Passage> results = svc.retrieve(new RagQuery("what is X", 2));
+        // RagQuery(String naturalLanguage, int topK, Map<String,String> filters)
+        List<Passage> results = svc.retrieve(new RagQuery("what is X", 2, Map.of()));
 
-        assertEquals(2, results.size(),          "topK=2 returned");
-        assertEquals("p1",          results.get(0).id(),      "first passage id");
-        assertEquals("content one", results.get(0).content(), "passage content");
-        assertEquals("dense",       results.get(0).source(),  "source=dense");
+        assertEquals(2, results.size(),           "topK=2 returned");
+        assertEquals("p1",         results.get(0).id(),      "first passage id");
+        assertEquals("content one",results.get(0).text(),    "passage text");   // Passage.text()
+        assertEquals("dense",      results.get(0).sourceId(),"source=dense");   // Passage.sourceId()
     }
 
     @Test
@@ -77,7 +78,7 @@ public class RagTest {
         BasicRagService svc = new BasicRagService(
                 new StubVectorStore(neighbors, payloads), new StubRelStore(), embedFn());
 
-        List<Passage> results = svc.retrieve(new RagQuery("q", 2));
+        List<Passage> results = svc.retrieve(new RagQuery("q", 2, Map.of()));
         assertEquals(2, results.size(), "topK respected");
     }
 
@@ -91,9 +92,10 @@ public class RagTest {
                 new StubVectorStore(neighbors, payloads), new StubRelStore(),
                 embedFn(), tracker);
 
-        svc.retrieve(new RagQuery("q", 1));
+        svc.retrieve(new RagQuery("q", 1, Map.of()));
 
-        assertEquals(TaintLabel.EXTERNAL, tracker.labelOf("p1"),
+        // TaintTracker.get(id) — not labelOf()
+        assertEquals(TaintLabel.EXTERNAL, tracker.get("p1"),
                 "retrieved passage must be labelled EXTERNAL");
     }
 
@@ -105,24 +107,27 @@ public class RagTest {
         BasicRagService svc = new BasicRagService(
                 new StubVectorStore(neighbors, payloads), new StubRelStore(), embedFn());
 
-        List<Passage> results = svc.retrieve(new RagQuery("q", 1));
+        List<Passage> results = svc.retrieve(new RagQuery("q", 1, Map.of()));
         assertEquals(1, results.size());
-        assertEquals("", results.get(0).content(), "null payload -> empty string");
+        assertEquals("", results.get(0).text(), "null payload -> empty string");  // Passage.text()
     }
 
     @Test
     public void testPassageRecord() {
-        Passage p = new Passage("id1", "text", "src", "dense", 0.95, Instant.now(), Map.of());
-        assertEquals("id1",  p.id());
-        assertEquals("text", p.content());
-        assertEquals(0.95,   p.score(), 1e-9);
-        assertEquals("dense", p.source());
+        // Passage(String id, String text, String title, String sourceId,
+        //         double score, Instant date, Map<String,String> metadata)
+        Passage p = new Passage("id1", "text", "title", "dense", 0.95, Instant.now(), Map.of());
+        assertEquals("id1",   p.id());
+        assertEquals("text",  p.text());      // .text() not .content()
+        assertEquals(0.95,    p.score(), 1e-9);
+        assertEquals("dense", p.sourceId());  // .sourceId() not .source()
     }
 
     @Test
     public void testRagQuery() {
-        RagQuery q = new RagQuery("find me X", 5);
-        assertEquals("find me X", q.naturalLanguage());
-        assertEquals(5, q.topK());
+        RagQuery q = new RagQuery("find me X", 5, Map.of("lang", "fr"));
+        assertEquals("find me X",   q.naturalLanguage());
+        assertEquals(5,             q.topK());
+        assertEquals("fr",          q.filters().get("lang"));
     }
 }

@@ -83,7 +83,8 @@ public class ObservabilityExtendedTest {
         assertEquals(500,         snap.totalTokens(), "tokens");
         assertEquals(3,           snap.toolCalls(),   "toolCalls");
         assertEquals(1,           snap.toolFailures(),"toolFailures");
-        assertTrue(snap.elapsedMs() >= 0,              "elapsed non-negative");
+        // MetricsSnapshot.durationMs() — not elapsedMs()
+        assertTrue(snap.durationMs() >= 0, "duration non-negative");
     }
 
     @Test
@@ -99,7 +100,6 @@ public class ObservabilityExtendedTest {
 
     @Test
     public void testAgentEventAllTypes() {
-        // Validates every EventType constant can be instantiated without NPE
         for (AgentEvent.EventType type : AgentEvent.EventType.values()) {
             AgentEvent e = new AgentEvent("run", "tenant", type, Instant.now(), Map.of());
             assertNotNull(e.type(), "type must not be null for " + type);

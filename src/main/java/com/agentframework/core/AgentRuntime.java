@@ -19,6 +19,12 @@ import java.util.concurrent.Executors;
  * persisted {@link ExecutionContext.Snapshot}, verifies the SHA-256 integrity hash,
  * and resumes the state machine from the checkpoint.  Use cases: post-incident
  * diagnosis, dry-run validation, regression testing against production snapshots.
+ *
+ * <p><b>HITL integration</b>: {@link #executeWith(Agent, DefaultExecutionContext)}
+ * drives the state machine into a caller-supplied {@link DefaultExecutionContext}.
+ * This allows {@code AsyncAgentRuntime} (in package {@code com.agentframework.hitl})
+ * to retain a reference to the live context after the run, enabling it to call
+ * {@link DefaultExecutionContext#checkpoint()} to detect and persist HITL suspension.
  */
 public class AgentRuntime {
 
@@ -59,9 +65,32 @@ public class AgentRuntime {
     /** Synchronous execution with explicit tenant and user context. */
     public ExecutionResult execute(Agent agent, Task task, String tenantId, String userId) {
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, tenantId, userId);
-        emit(ctx, AgentEvent.EventType.RUN_STARTED, Map.of("instruction", task.instruction()));
+        return executeWith(agent, ctx);
+    }
+
+    /**
+     * Drives the state machine into a <em>caller-supplied</em>
+     * {@link DefaultExecutionContext}.
+     *
+     * <p>This overload exists so that {@code AsyncAgentRuntime} can build and
+     * hold the context in its own scope, then call
+     * {@link DefaultExecutionContext#checkpoint()} after execution to detect
+     * HITL suspension and persist the post-run snapshot.  Without this method,
+     * {@code AsyncAgentRuntime} would have no access to the live context because
+     * {@link ExecutionResult} carries only the final state fields, not the full
+     * mutable context.
+     *
+     * @param agent the agent to execute
+     * @param ctx   a fully initialised (or restored) execution context;
+     *              its state is mutated in place by the state machine
+     * @return the {@link ExecutionResult} produced when the state machine exits
+     */
+    public ExecutionResult executeWith(Agent agent, DefaultExecutionContext ctx) {
+        emit(ctx, AgentEvent.EventType.RUN_STARTED,
+            Map.of("instruction", ctx.task().instruction()));
         new StateMachineRunner(validator, events).run(agent, ctx);
-        emit(ctx, AgentEvent.EventType.RUN_COMPLETED, Map.of("state", ctx.currentState().name()));
+        emit(ctx, AgentEvent.EventType.RUN_COMPLETED,
+            Map.of("state", ctx.currentState().name()));
         return ExecutionResult.from(ctx);
     }
 
@@ -77,23 +106,10 @@ public class AgentRuntime {
             () -> execute(agent, task, tenantId, userId), asyncPool);
     }
 
-    // ── N5: Deterministic replay ─────────────────────────────────────────────
+    // ── N5: Deterministic replay ──────────────────────────────────────────
 
     /**
      * Resumes execution from a previously persisted snapshot.
-     *
-     * <p>Steps:
-     * <ol>
-     *   <li>Recomputes the SHA-256 integrity hash and compares it to the stored value;
-     *       throws {@link IllegalArgumentException} if they differ.</li>
-     *   <li>Reconstructs a {@link Task} from the root-goal description embedded in the
-     *       snapshot with unconstrained resource limits — callers who want bounded replay
-     *       should build a custom Task and use
-     *       {@link #replay(ExecutionContext.Snapshot, Agent, Task, String, String)}.</li>
-     *   <li>Creates a fresh {@link DefaultExecutionContext}, restores all mutable state
-     *       (goal stack, working memory, beliefs, token/cost counters, cycle index), then
-     *       hands control to {@link StateMachineRunner}.</li>
-     * </ol>
      *
      * @param snapshot  a verified snapshot from {@link ExecutionContext#checkpoint()}
      * @param agent     agent implementation used for the resumed run
@@ -137,7 +153,7 @@ public class AgentRuntime {
         return replay(snapshot, agent, SYSTEM_TENANT, "replay-user");
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private void verifyIntegrity(ExecutionContext.Snapshot snapshot) {
         String expected = DefaultExecutionContext.computeSnapshotHash(snapshot);

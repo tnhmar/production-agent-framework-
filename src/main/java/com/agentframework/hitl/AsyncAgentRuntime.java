@@ -1,19 +1,21 @@
 package com.agentframework.hitl;
 
 import com.agentframework.core.Agent;
+import com.agentframework.core.AgentRuntime;
+import com.agentframework.core.Belief;
 import com.agentframework.core.DefaultExecutionContext;
 import com.agentframework.core.ExecutionContext;
 import com.agentframework.core.ExecutionResult;
 import com.agentframework.core.Goal;
-import com.agentframework.core.RunState;
-import com.agentframework.core.StateMachineRunner;
-import com.agentframework.core.Task;
-import com.agentframework.foundation.Origin;
-import com.agentframework.foundation.TaintLabel;
-import com.agentframework.foundation.WorkingMemoryEntry;
-import com.agentframework.foundation.WorkingMemoryTier;
 import com.agentframework.core.JobToken;
 import com.agentframework.core.PlanValidator;
+import com.agentframework.core.WorkingMemory;
+import com.agentframework.core.WorkingMemoryEntry;
+import com.agentframework.core.WorkingMemoryTier;
+import com.agentframework.foundation.Origin;
+import com.agentframework.foundation.RunState;
+import com.agentframework.foundation.TaintLabel;
+import com.agentframework.foundation.Task;
 import com.agentframework.observability.AgentEvent;
 import com.agentframework.observability.EventSink;
 
@@ -32,118 +34,128 @@ import java.util.concurrent.Executors;
 /**
  * Asynchronous agent runtime with Human-in-the-Loop (HITL) pause/resume.
  *
+ * <h3>Design constraints</h3>
+ * <ul>
+ *   <li>{@link com.agentframework.core.StateMachineRunner} is intentionally
+ *       package-private; this class must not reference it directly.</li>
+ *   <li>Execution is delegated to the public {@link AgentRuntime} facade.
+ *       For fresh runs {@link AgentRuntime#execute} is used on a dedicated
+ *       async pool; for resume {@link AgentRuntime#replay} is used.</li>
+ * </ul>
+ *
  * <h3>HITL flow</h3>
  * <ol>
- *   <li>{@link #suspend} starts the agent on the async pool and returns a
+ *   <li>{@link #suspend} submits the agent to the async pool and returns a
  *       {@link CompletableFuture} immediately.</li>
- *   <li>If {@link StateMachineRunner} exits with {@link RunState#SUSPENDED_HITL},
- *       the context is check-pointed and the snapshot is stored in
- *       {@link ExecutionStore} keyed by a new {@code tokenId}.</li>
+ *   <li>When the synchronous runtime exits with {@link RunState#SUSPENDED_HITL},
+ *       the context is check-pointed, the snapshot is stored in
+ *       {@link ExecutionStore} keyed by a fresh {@code tokenId}, and a
+ *       {@link JobToken} is placed in the run's {@code activeJobs()} map.
+ *       The {@link CompletableFuture} remains pending.</li>
  *   <li>The operator calls {@link #resume(JobToken, ApprovalDecision, Agent)},
- *       which loads and SHA-256-verifies the snapshot, restores the context,
- *       injects the approval decision into working memory, and re-runs.</li>
+ *       which loads the snapshot, verifies its SHA-256 hash, injects the
+ *       decision into working memory, and calls {@link AgentRuntime#replay}.</li>
  *   <li>The original {@link CompletableFuture} is completed when the resumed
  *       run finishes.</li>
  * </ol>
- *
- * <h3>Contract for {@link ExecutionStore}</h3>
- * {@code ExecutionStore.load(id)} returns the raw {@link ExecutionContext.Snapshot}
- * or {@code null} if no snapshot exists for the given id.  It does NOT return
- * {@code Optional} — callers are responsible for null-guards.
  */
 public class AsyncAgentRuntime {
 
-    private final PlanValidator   validator;
+    private final AgentRuntime    runtime;
     private final EventSink       events;
     private final ExecutionStore  store;
     private final ExecutorService pool;
 
+    /** Pending futures keyed by the original runId. */
     private final ConcurrentHashMap<String, CompletableFuture<ExecutionResult>>
         pendingFutures = new ConcurrentHashMap<>();
 
+    // ── Constructors ────────────────────────────────────────────────────────
+
     public AsyncAgentRuntime(PlanValidator validator, EventSink events, ExecutionStore store) {
-        this(validator, events, store, defaultPool());
+        this(new AgentRuntime(validator, events), events, store, defaultPool());
     }
 
-    public AsyncAgentRuntime(PlanValidator validator, EventSink events,
-                             ExecutionStore store, ExecutorService pool) {
-        this.validator = Objects.requireNonNull(validator, "validator");
-        this.events    = Objects.requireNonNull(events,    "events");
-        this.store     = Objects.requireNonNull(store,     "store");
-        this.pool      = Objects.requireNonNull(pool,      "pool");
+    public AsyncAgentRuntime(AgentRuntime runtime, EventSink events,
+                              ExecutionStore store, ExecutorService pool) {
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this.events  = Objects.requireNonNull(events,  "events");
+        this.store   = Objects.requireNonNull(store,   "store");
+        this.pool    = Objects.requireNonNull(pool,    "pool");
     }
 
-    // ── Public API ────────────────────────────────────────────────────────
+    // ── Public API ──────────────────────────────────────────────────────────
 
+    /**
+     * Starts a new agent run asynchronously.
+     *
+     * @return a future that completes when the run finishes or is suspended
+     */
     public CompletableFuture<ExecutionResult> suspend(
             Agent agent, Task task, String tenantId, String userId) {
+
         CompletableFuture<ExecutionResult> future = new CompletableFuture<>();
         CompletableFuture.runAsync(
-            () -> runWithHitlSupport(agent, task, tenantId, userId, future),
+            () -> runAndHandleSuspension(agent, task, tenantId, userId, null, future),
             pool);
         return future;
     }
 
     /**
-     * Resumes a suspended HITL run.
+     * Resumes a previously suspended HITL run.
+     *
+     * <p>{@link ExecutionStore#load(String)} returns a raw (nullable)
+     * {@link ExecutionContext.Snapshot} — it does <em>not</em> return
+     * {@code Optional}.</p>
      *
      * @param token    the token issued when the run was suspended
-     * @param decision the operator's approval/rejection/modification
-     * @param agent    the agent implementation used in {@link #suspend}
+     * @param decision the operator's approval / rejection / modification
+     * @param agent    the same agent implementation used in {@link #suspend}
+     * @return the future that was originally returned by {@link #suspend}
      */
     public CompletableFuture<ExecutionResult> resume(
             JobToken token, ApprovalDecision decision, Agent agent) {
 
-        // 1. Load snapshot — ExecutionStore.load() returns nullable Snapshot,
-        //    not Optional.  Guard explicitly.
+        // load() is nullable — no Optional, guard explicitly
         ExecutionContext.Snapshot snap = store.load(token.jobId());
         if (snap == null) {
             throw new IllegalStateException(
-                "No snapshot found for jobToken=" + token.jobId());
+                "No HITL snapshot found for jobToken=" + token.jobId());
         }
 
-        // 2. Verify integrity before restoring any state
-        verifyIntegrity(snap);
-
-        // 3. Restore context
-        Task replayTask = buildReplayTask(snap);
+        // Inject operator decision as a CLEAN SYSTEM working-memory entry.
+        // We create a fresh context from snapshot, add the entry, checkpoint
+        // again, then hand the enriched snapshot to AgentRuntime.replay().
         DefaultExecutionContext ctx = new DefaultExecutionContext(
-            replayTask, snap.runId(), "hitl-resume-user");
+            buildReplayTask(snap), snap.runId(), "hitl-resume");
         ctx.restoreFromSnapshot(snap);
-
-        // 4. Inject operator decision as a CLEAN SYSTEM working-memory entry
-        String decisionText = switch (decision) {
-            case ApprovalDecision.Approved  a -> "HITL_DECISION: APPROVED";
-            case ApprovalDecision.Rejected  r -> "HITL_DECISION: REJECTED | " + r.reason();
-            case ApprovalDecision.Modified  m -> "HITL_DECISION: MODIFIED | tool=" + m.updatedCall().toolName();
-            case ApprovalDecision.Escalated e -> "HITL_DECISION: ESCALATED | " + e.reason();
-        };
-        ctx.workingMemory().add(new WorkingMemoryEntry(
-            UUID.randomUUID().toString(),
-            decisionText,
-            WorkingMemoryTier.ACTIVE,
-            Origin.SYSTEM,
-            1.0,
-            Instant.now(),
-            TaintLabel.CLEAN));
-
-        // 5. Re-enter from VALIDATING so the state machine re-validates the plan
+        ctx.workingMemory().add(buildDecisionEntry(decision));
         ctx.transitionTo(RunState.VALIDATING);
 
         CompletableFuture<ExecutionResult> future =
-            pendingFutures.getOrDefault(snap.runId(), new CompletableFuture<>());
-        pendingFutures.put(snap.runId(), future);
+            pendingFutures.computeIfAbsent(snap.runId(), id -> new CompletableFuture<>());
 
-        CompletableFuture.runAsync(
-            () -> runWithHitlSupport(agent, replayTask,
-                snap.runId(), "hitl-resume-user", future, ctx),
-            pool);
+        ExecutionContext.Snapshot enriched = ctx.checkpoint();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                // AgentRuntime.replay() is the public cross-package entry point;
+                // it verifies integrity, restores state, and runs StateMachineRunner.
+                ExecutionResult result = runtime.replay(
+                    enriched, agent, snap.runId(), "hitl-resume");
+                future.complete(result);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            }
+        }, pool);
+
         return future;
     }
 
     /**
-     * Non-blocking status poll for a suspended job.
-     * ExecutionStore.load() returns null when no snapshot exists.
+     * Non-blocking status poll.
+     * Returns {@link JobStatus#NOT_FOUND} when no snapshot exists
+     * (store.load returns null).
      */
     public JobStatus query(JobToken token) {
         if (store.load(token.jobId()) == null) return JobStatus.NOT_FOUND;
@@ -155,108 +167,69 @@ public class AsyncAgentRuntime {
 
     public enum JobStatus { PENDING, COMPLETED, NOT_FOUND }
 
-    // ── Internal helpers ──────────────────────────────────────────────────
+    // ── Internal ─────────────────────────────────────────────────────────────
 
-    private void runWithHitlSupport(
+    private void runAndHandleSuspension(
             Agent agent, Task task, String tenantId, String userId,
-            CompletableFuture<ExecutionResult> future) {
-        DefaultExecutionContext ctx = new DefaultExecutionContext(task, tenantId, userId);
-        runWithHitlSupport(agent, task, tenantId, userId, future, ctx);
-    }
-
-    private void runWithHitlSupport(
-            Agent agent, Task task, String tenantId, String userId,
-            CompletableFuture<ExecutionResult> future,
-            DefaultExecutionContext ctx) {
+            String existingRunId, CompletableFuture<ExecutionResult> future) {
         try {
-            emit(ctx, AgentEvent.EventType.RUN_STARTED,
+            emit(tenantId, existingRunId != null ? existingRunId : "pending",
+                AgentEvent.EventType.RUN_STARTED,
                 Map.of("instruction", task.instruction()));
 
-            // StateMachineRunner is in com.agentframework.core — import added above
-            new StateMachineRunner(validator, events).run(agent, ctx);
+            // Delegate to the public runtime facade — it owns StateMachineRunner.
+            ExecutionResult result = runtime.execute(agent, task, tenantId, userId);
 
-            if (ctx.currentState() == RunState.SUSPENDED_HITL) {
-                // Checkpoint and persist under a fresh tokenId.
-                // ExecutionStore.save(snapshot) is 1-arg; the snapshot carries
-                // its own runId as the lookup key.
-                ExecutionContext.Snapshot snap = ctx.checkpoint();
-
-                // We want the token to have its own id (distinct from the runId)
-                // so that HITL tokens are not confused with run ids.  We save a
-                // wrapped snapshot whose runId() is the tokenId; the store uses
-                // runId() as the primary key (see InMemoryExecutionStore).
-                String tokenId = UUID.randomUUID().toString();
-                ExecutionContext.Snapshot tokenSnap = wrapWithId(snap, tokenId);
-                store.save(tokenSnap);
-
-                // JobToken is a 3-field record: jobId, statusEndpoint, estimatedDuration
-                JobToken token = new JobToken(
-                    tokenId,
-                    "/api/v1/jobs/" + tokenId + "/status",
-                    Duration.ofMinutes(30));
-                ctx.activeJobs().put(tokenId, token);
-                pendingFutures.put(ctx.runId(), future);
-
-                emit(ctx, AgentEvent.EventType.HITL_REQUESTED,
-                    Map.of("jobToken", tokenId));
-                // Future remains pending until resume() completes it.
-
+            if (result.finalState() == RunState.SUSPENDED_HITL) {
+                handleSuspension(result, future);
             } else {
-                emit(ctx, AgentEvent.EventType.RUN_COMPLETED,
-                    Map.of("state", ctx.currentState().name()));
-                future.complete(ExecutionResult.from(ctx));
+                future.complete(result);
             }
         } catch (Exception e) {
             future.completeExceptionally(e);
         }
     }
 
-    // ── Snapshot delegation helper ─────────────────────────────────────────
-    //
-    // Replaces the anonymous-class hack that caused List-not-found errors.
-    // A named static inner class is explicit, compiler-visible, and fully typed.
+    private void handleSuspension(
+            ExecutionResult result, CompletableFuture<ExecutionResult> future) {
 
-    private static ExecutionContext.Snapshot wrapWithId(
-            ExecutionContext.Snapshot delegate, String newRunId) {
-        return new DelegatingSnapshot(delegate, newRunId);
+        ExecutionContext.Snapshot snap = result.snapshot();
+        String tokenId = UUID.randomUUID().toString();
+
+        // Wrap with a tokenId-keyed snapshot so the store uses tokenId as key.
+        ExecutionContext.Snapshot tokenSnap = new DelegatingSnapshot(snap, tokenId);
+        store.save(tokenSnap);
+
+        JobToken token = new JobToken(
+            tokenId,
+            "/api/v1/jobs/" + tokenId + "/status",
+            Duration.ofMinutes(30));
+
+        pendingFutures.put(snap.runId(), future);
+
+        emit(snap.runId(), snap.runId(),
+            AgentEvent.EventType.HITL_REQUESTED,
+            Map.of("jobToken", tokenId));
+        // Future remains pending until resume() completes it.
     }
 
-    private static final class DelegatingSnapshot implements ExecutionContext.Snapshot {
-        private final ExecutionContext.Snapshot d;
-        private final String overrideRunId;
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
-        DelegatingSnapshot(ExecutionContext.Snapshot d, String overrideRunId) {
-            this.d = d;
-            this.overrideRunId = overrideRunId;
-        }
-
-        @Override public String                    runId()                  { return overrideRunId; }
-        @Override public RunState                  state()                  { return d.state(); }
-        @Override public int                       cycle()                  { return d.cycle(); }
-        @Override public String                    schemaVersion()          { return d.schemaVersion(); }
-        @Override public List<Goal>                goalStackSnapshot()      { return d.goalStackSnapshot(); }
-        @Override public List<com.agentframework.core.WorkingMemoryEntry> workingMemorySnapshot() { return d.workingMemorySnapshot(); }
-        @Override public List<com.agentframework.core.Belief>             beliefSnapshot()         { return d.beliefSnapshot(); }
-        @Override public int                       totalTokens()            { return d.totalTokens(); }
-        @Override public BigDecimal                totalCost()              { return d.totalCost(); }
-        @Override public int                       consecutiveFailures()    { return d.consecutiveFailures(); }
-        @Override public int                       stagnantCycles()         { return d.stagnantCycles(); }
-        @Override public int                       stuckCycles()            { return d.stuckCycles(); }
-        @Override public int                       revisionCount()          { return d.revisionCount(); }
-        @Override public String                    integrityHash()          { return d.integrityHash(); }
-    }
-
-    // ── Integrity + replay helpers ─────────────────────────────────────────
-
-    private void verifyIntegrity(ExecutionContext.Snapshot snapshot) {
-        String expected = DefaultExecutionContext.computeSnapshotHash(snapshot);
-        if (!expected.equals(snapshot.integrityHash())) {
-            throw new IllegalArgumentException(
-                "HITL resume: snapshot integrity check failed for runId="
-                + snapshot.runId() + " at cycle=" + snapshot.cycle()
-                + ". Expected=" + expected
-                + ", stored=" + snapshot.integrityHash());
-        }
+    private WorkingMemoryEntry buildDecisionEntry(ApprovalDecision decision) {
+        String text = switch (decision) {
+            case ApprovalDecision.Approved  a -> "HITL_DECISION: APPROVED";
+            case ApprovalDecision.Rejected  r -> "HITL_DECISION: REJECTED | " + r.reason();
+            case ApprovalDecision.Modified  m -> "HITL_DECISION: MODIFIED | tool=" + m.updatedCall().toolName();
+            case ApprovalDecision.Escalated e -> "HITL_DECISION: ESCALATED | " + e.reason();
+        };
+        return new WorkingMemoryEntry(
+            UUID.randomUUID().toString(),
+            text,
+            WorkingMemoryTier.ACTIVE,
+            Origin.SYSTEM,
+            1.0,
+            Instant.now(),
+            TaintLabel.CLEAN);
     }
 
     private Task buildReplayTask(ExecutionContext.Snapshot snap) {
@@ -272,10 +245,9 @@ public class AsyncAgentRuntime {
             .build();
     }
 
-    private void emit(ExecutionContext ctx, AgentEvent.EventType type,
-                      Map<String, Object> attrs) {
-        events.emit(new AgentEvent(
-            ctx.runId(), ctx.tenantId(), type, Instant.now(), attrs));
+    private void emit(String tenantId, String runId,
+                      AgentEvent.EventType type, Map<String, Object> attrs) {
+        events.emit(new AgentEvent(runId, tenantId, type, Instant.now(), attrs));
     }
 
     private static ExecutorService defaultPool() {
@@ -284,5 +256,37 @@ public class AsyncAgentRuntime {
             t.setDaemon(true);
             return t;
         });
+    }
+
+    // ── DelegatingSnapshot ────────────────────────────────────────────────────
+    //
+    // Named static inner class — fully participates in the file's import scope.
+    // Replaces the anonymous class that caused "cannot find symbol: class List"
+    // errors because anonymous classes do not inherit enclosing import declarations.
+
+    private static final class DelegatingSnapshot implements ExecutionContext.Snapshot {
+
+        private final ExecutionContext.Snapshot d;
+        private final String                    overrideRunId;
+
+        DelegatingSnapshot(ExecutionContext.Snapshot d, String overrideRunId) {
+            this.d             = Objects.requireNonNull(d);
+            this.overrideRunId = Objects.requireNonNull(overrideRunId);
+        }
+
+        @Override public String             runId()                  { return overrideRunId; }
+        @Override public RunState           state()                  { return d.state(); }
+        @Override public int                cycle()                  { return d.cycle(); }
+        @Override public String             schemaVersion()          { return d.schemaVersion(); }
+        @Override public List<Goal>         goalStackSnapshot()      { return d.goalStackSnapshot(); }
+        @Override public List<WorkingMemoryEntry> workingMemorySnapshot() { return d.workingMemorySnapshot(); }
+        @Override public List<Belief>       beliefSnapshot()         { return d.beliefSnapshot(); }
+        @Override public int                totalTokens()            { return d.totalTokens(); }
+        @Override public BigDecimal         totalCost()              { return d.totalCost(); }
+        @Override public int                consecutiveFailures()    { return d.consecutiveFailures(); }
+        @Override public int                stagnantCycles()         { return d.stagnantCycles(); }
+        @Override public int                stuckCycles()            { return d.stuckCycles(); }
+        @Override public int                revisionCount()          { return d.revisionCount(); }
+        @Override public String             integrityHash()          { return d.integrityHash(); }
     }
 }

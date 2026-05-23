@@ -5,6 +5,7 @@ import com.agentframework.action.*;
 import com.agentframework.action.middleware.*;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
+import com.agentframework.observability.EventSink;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.*;
@@ -84,8 +85,9 @@ public class ActionTest {
     public void testTaintValidatorBlocksHostile() {
         SimpleToolRegistry reg = registryWith("search",
             (args, ctx) -> ToolResult.ok("results"));
+        // TaintActionValidator requires EventSink (constructor-injected for testability)
         DefaultAction action = new DefaultAction(reg,
-            List.of(new TaintActionValidator()), ToolMiddleware.identity(),
+            List.of(new TaintActionValidator(EventSink.noop())), ToolMiddleware.identity(),
             new DefaultToolDispatcher(reg));
         DefaultExecutionContext ctx = ctx();
         // Inject HOSTILE entry into working memory

@@ -5,6 +5,8 @@ import com.agentframework.core.*;
 import com.agentframework.foundation.*;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Map;
+import java.util.List;
 public class CoreTest {
 
     private DefaultExecutionContext ctx() {
@@ -203,5 +205,52 @@ public class CoreTest {
         assertEquals(1, wm.size(), "compressed to 1");
         assertEquals("compressed summary", wm.getAll().get(0).content(), "summary");
         assertEquals(WorkingMemoryTier.COMPRESSED, wm.getAll().get(0).tier(), "COMPRESSED tier");
+    }
+
+    @Test public void testGoalSuccessCriteria() {
+        Budget b=new Budget(10,10_000,java.time.Duration.ofMinutes(1),BigDecimal.ONE);
+        assertEquals("done !del",new Goal("g",null,GoalStatus.PENDING,"t",List.of(),b,"done !del").successCriteria());
+        assertEquals("",new Goal("g",null,GoalStatus.PENDING,"t",List.of(),b).successCriteria());
+        assertEquals("",new Goal("g",null,GoalStatus.PENDING,"t",List.of(),b,null).successCriteria());
+        assertEquals("fluent",new Goal("g",null,GoalStatus.PENDING,"t",List.of(),b).withSuccessCriteria("fluent").successCriteria());
+    }
+    @Test public void testGoalCoherenceValidator() {
+        Budget b=new Budget(10,10_000,java.time.Duration.ofMinutes(1),BigDecimal.ONE);
+        GoalCoherencePlanValidator v=new GoalCoherencePlanValidator();
+        assertInstanceOf(ValidationResult.Failed.class,v.validate(new ToolCall("x",Map.of(),""),ctx()));
+        assertInstanceOf(ValidationResult.Passed.class,v.validate(new Escalate("h","HIGH"),ctx()));
+        DefaultExecutionContext pend=ctx();
+        pend.goalStack().push(new Goal("root",null,GoalStatus.PENDING,"t",List.of(),b));
+        assertInstanceOf(ValidationResult.Passed.class,v.validate(new FinalAnswer("ok",List.of()),pend));
+        DefaultExecutionContext comp=ctx();
+        comp.goalStack().push(new Goal("root",null,GoalStatus.COMPLETED,"t",List.of(),b));
+        assertInstanceOf(ValidationResult.Failed.class,v.validate(new FinalAnswer("x",List.of()),comp));
+        DefaultExecutionContext excl=ctx();
+        excl.goalStack().push(new Goal("root",null,GoalStatus.PENDING,"t",List.of(),b,"do !web_search"));
+        assertInstanceOf(ValidationResult.NeedsCorrection.class,v.validate(new ToolCall("web_search",Map.of(),""),excl));
+        assertInstanceOf(ValidationResult.Passed.class,v.validate(new ToolCall("calc",Map.of(),""),excl));
+    }
+    @Test public void testCompositePlanValidator() {
+        CompositePlanValidator all=new CompositePlanValidator(List.of(new PassThroughPlanValidator(),new PassThroughPlanValidator()));
+        assertInstanceOf(ValidationResult.Passed.class,all.validate(new FinalAnswer("ok",List.of()),ctx()));
+        PlanValidator blk=new PlanValidator(){
+            public ValidationResult validate(Decision d,ExecutionContext c){return new ValidationResult.Failed("b",List.of());}
+            public ValidationResult validateAfterAction(ActionResult r,ExecutionContext c){return new ValidationResult.Passed();}};
+        assertInstanceOf(ValidationResult.Failed.class,new CompositePlanValidator(List.of(blk,new PassThroughPlanValidator())).validate(new FinalAnswer("x",List.of()),ctx()));
+        assertThrows(IllegalArgumentException.class,()->new CompositePlanValidator(List.of()));
+    }
+    @Test public void testLivenessCounters() {
+        DefaultExecutionContext c=ctx();
+        c.incrementStagnantCycles();c.incrementStagnantCycles();assertEquals(2,c.stagnantCycles());
+        c.resetStagnantCycles();assertEquals(0,c.stagnantCycles());
+        c.incrementStuckCycles();assertEquals(1,c.stuckCycles());c.resetStuckCycles();assertEquals(0,c.stuckCycles());
+        c.incrementChainDepth();c.incrementChainDepth();assertEquals(2,c.currentChainDepth());
+        c.resetChainDepth();assertEquals(0,c.currentChainDepth());
+    }
+    @Test public void testSnapshotIntegrity() {
+        ExecutionContext.Snapshot s=ctx().checkpoint();
+        assertNotNull(s.integrityHash());assertFalse(s.integrityHash().isBlank());
+        assertEquals(s.integrityHash(),DefaultExecutionContext.computeSnapshotHash(s));
+        assertEquals(DefaultExecutionContext.SNAPSHOT_SCHEMA_VERSION,s.schemaVersion());
     }
 }

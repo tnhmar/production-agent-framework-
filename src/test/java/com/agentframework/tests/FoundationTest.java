@@ -107,4 +107,14 @@ public class FoundationTest {
         String trunc = est.truncate(text, 2);
         assertTrue(trunc.length() <= text.length(), "truncate shorter");
     }
+
+    @Test public void testTaskMaxChainDepth() {
+        assertEquals(10,Task.builder().instruction("x").build().maxChainDepth());
+        assertEquals(5,Task.builder().instruction("x").maxChainDepth(5).build().maxChainDepth());
+        assertEquals(0,Task.builder().instruction("x").maxChainDepth(0).build().maxChainDepth());
+        assertThrows(IllegalArgumentException.class,()->Task.builder().instruction("x").maxChainDepth(-1).build());
+    }
+    @Test public void testCycleRecordRetryCount() {
+        assertEquals(0,CycleRecord.of(1,null,new FinalAnswer("done",List.of()),null,"ok").retryCount());
+    }
 }

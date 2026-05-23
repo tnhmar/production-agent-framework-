@@ -2,6 +2,7 @@ package com.agentframework.tests;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 import com.agentframework.action.*;
+import com.agentframework.foundation.ValidationVerdict;
 import com.agentframework.action.middleware.*;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
@@ -163,5 +164,35 @@ public class RuntimeTest {
         assertFalse(
             r1.cycleRecords().isEmpty() && r2.cycleRecords().isEmpty(),
             "both ran");
+    }
+
+    @Test public void testStagnationDetectorTerminates() {
+        SimpleToolRegistry reg=new SimpleToolRegistry();
+        reg.register(ToolContract.readOnly("noop","1.0","noop"),(a,c)->ToolResult.ok("same"));
+        InMemoryEventSink sink=new InMemoryEventSink();
+        AgentRuntime rt=new AgentRuntime(new PassThroughPlanValidator(),sink);
+        ExecutionResult r=rt.execute(agentWith(StubLLMProvider.toolCall("noop","{}"),reg),
+            Task.builder().instruction("loop").maxCycles(20).build(),"t1","u1");
+        assertFalse(r.succeeded());
+        assertInstanceOf(TerminationReason.Escalated.class,r.terminationReason());
+        assertTrue(sink.count(AgentEvent.EventType.GOAL_STAGNATION_DETECTED)>=1);
+    }
+    @Test public void testReplayFromValidSnapshot() {
+        SimpleToolRegistry reg=new SimpleToolRegistry();
+        Task task=Task.builder().instruction("replay").maxCycles(10).build();
+        ExecutionContext.Snapshot snap=new DefaultExecutionContext(task,"t1","u1").checkpoint();
+        ExecutionResult r=runtime().replay(snap,agentWith(StubLLMProvider.finalAnswer("replayed"),reg),"t1","u1");
+        assertTrue(r.succeeded()); assertEquals("replayed",r.finalAnswer());
+    }
+    @Test public void testToolResultRetryCount() {
+        ToolResult b=ToolResult.ok("data");
+        assertEquals(0,b.retryCount()); assertEquals(3,b.withRetryCount(3).retryCount()); assertEquals(0,b.retryCount());
+    }
+    @Test public void testRetryMiddlewareAttachesCount() {
+        java.util.concurrent.atomic.AtomicInteger a=new java.util.concurrent.atomic.AtomicInteger();
+        RetryMiddleware mw=new RetryMiddleware(2,0);
+        ToolInvocation inv=new ToolInvocation(ToolContract.readOnly("t","1.0","t"),Map.of(),null,ValidationVerdict.ok());
+        ToolResult r=mw.apply(inv,i->{if(a.incrementAndGet()==1)throw new RuntimeException("t");return ToolResult.ok("ok");});
+        assertEquals(1,r.retryCount()); assertEquals("ok",r.data());
     }
 }

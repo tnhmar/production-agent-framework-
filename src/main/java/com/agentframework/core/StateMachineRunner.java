@@ -2,50 +2,48 @@ package com.agentframework.core;
 
 import com.agentframework.foundation.*;
 import com.agentframework.observability.*;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
- * Drives the agent through its RunState machine.
+ * Drives the agent through its {@link RunState} machine.
  *
- * <p>Three liveness detectors added for full Volume 1 conformity:
- * <ul>
- *   <li><b>N3</b> – delegation depth enforcement: aborts if {@code ctx.currentChainDepth()}
- *       exceeds the task's {@code maxChainDepth} (default 10) at INITIALIZED.</li>
- *   <li><b>N2</b> – stuck-state detector: terminates after {@value #MAX_STUCK_CYCLES}
- *       consecutive cycles where the model produces neither a tool call nor a terminal
- *       decision.</li>
- *   <li><b>N1</b> – goal-stagnation detector: terminates after {@value #MAX_STAGNANT_CYCLES}
- *       consecutive cycles where the SHA-256 goal-state hash is identical post-cycle,
- *       indicating the agent is looping without advancing toward its goal.</li>
- * </ul>
+ * <p>This class has a single responsibility: state-transition orchestration.
+ * All liveness judgements (stagnation and stuck-state detection) are delegated
+ * to an injected {@link LivenessDetector}.  All taint classification is handled
+ * inside {@link Review}.
+ *
+ * <h3>State machine</h3>
+ * <pre>
+ *   INITIALIZED → VALIDATING → PLANNING → MODEL_CALL → PLANNING
+ *               ↪ (on limit)   → TOOL_EXECUTION → MEMORY_UPDATE
+ *                               → TERMINATED / COMPLETED / ABORTED
+ * </pre>
+ *
+ * <p>SUSPENDED_HITL and WAITING_FOR_JOB are handled by
+ * {@link com.agentframework.hitl.AsyncAgentRuntime} — this synchronous
+ * runner does not block on human input.
  */
 class StateMachineRunner {
-    private final PlanValidator validator;
-    private final EventSink     events;
 
-    private static final int MAX_STAGNANT_CYCLES     = 3;
-    private static final int MAX_STUCK_CYCLES        = 2;
-    private static final int DEFAULT_MAX_CHAIN_DEPTH = 10;
+    private final PlanValidator    validator;
+    private final EventSink        events;
+    private final LivenessDetector liveness;
 
     StateMachineRunner(PlanValidator validator, EventSink events) {
+        this(validator, events, new DefaultLivenessDetector());
+    }
+
+    StateMachineRunner(PlanValidator validator, EventSink events, LivenessDetector liveness) {
         this.validator = validator;
         this.events    = events;
+        this.liveness  = liveness;
     }
 
     void run(Agent agent, ExecutionContext ctx) {
         while (ctx.currentState().isLive()) {
             step(agent, ctx);
-            if (ctx.cycleCount() > ctx.task().maxCycles() + 5) {
-                ctx.setTerminationReason(new TerminationReason.ResourceLimit("cycle overflow"));
-                ctx.transitionTo(RunState.ABORTED);
-                break;
-            }
         }
     }
 
@@ -54,33 +52,29 @@ class StateMachineRunner {
 
             case INITIALIZED -> {
                 Task t = ctx.task();
-
-                // N3: enforce delegation depth before any work begins
-                int maxDepth = (t.maxChainDepth() > 0) ? t.maxChainDepth() : DEFAULT_MAX_CHAIN_DEPTH;
+                int maxDepth = (t.maxChainDepth() > 0) ? t.maxChainDepth() : 10;
                 if (ctx.currentChainDepth() > maxDepth) {
-                    ctx.setTerminationReason(new TerminationReason.ResourceLimit(
-                        "Delegation depth " + ctx.currentChainDepth() + " exceeds limit " + maxDepth));
-                    emit(ctx, AgentEvent.EventType.DELEGATION_DEPTH_EXCEEDED,
+                    terminate(ctx, new TerminationReason.ResourceLimit(
+                        "Delegation depth " + ctx.currentChainDepth() + " exceeds limit " + maxDepth),
+                        AgentEvent.EventType.DELEGATION_DEPTH_EXCEEDED,
                         Map.of("depth", ctx.currentChainDepth(), "limit", maxDepth));
-                    ctx.transitionTo(RunState.ABORTED);
                     return;
                 }
-
                 Budget taskBudget = new Budget(
                     t.maxCycles(), t.maxTokens(),
-                    t.maxWallClockTime() != null ? t.maxWallClockTime() : java.time.Duration.ofHours(24),
-                    t.budgetLimit()      != null ? t.budgetLimit()      : java.math.BigDecimal.valueOf(Long.MAX_VALUE));
-                ctx.goalStack().push(new Goal("root", null, GoalStatus.PENDING,
-                    t.instruction(), List.of(), taskBudget));
+                    t.maxWallClockTime()  != null ? t.maxWallClockTime()  : java.time.Duration.ofHours(24),
+                    t.budgetLimit()       != null ? t.budgetLimit()       : java.math.BigDecimal.valueOf(Long.MAX_VALUE));
+                ctx.goalStack().push(new Goal(
+                    "root", null, GoalStatus.PENDING, t.instruction(),
+                    java.util.List.of(), taskBudget));
                 ctx.transitionTo(RunState.VALIDATING);
             }
 
             case VALIDATING -> {
                 TerminationReason limit = checkResourceLimits(ctx);
                 if (limit != null) {
-                    ctx.setTerminationReason(limit);
-                    ctx.transitionTo(RunState.TERMINATED);
-                    emit(ctx, AgentEvent.EventType.RESOURCE_LIMIT_HIT, Map.of("reason", limit.toString()));
+                    terminate(ctx, limit, AgentEvent.EventType.RESOURCE_LIMIT_HIT,
+                        Map.of("reason", limit.toString()));
                     return;
                 }
                 ctx.transitionTo(RunState.PLANNING);
@@ -98,125 +92,85 @@ class StateMachineRunner {
                 }
                 emit(ctx, AgentEvent.EventType.CYCLE_STARTED, Map.of("cycle", ctx.cycleCount()));
 
-                // N1: snapshot goal-state hash BEFORE the model call
-                String preGoalHash = hashGoalState(ctx.goalStack().all());
+                String preGoalHash = DefaultLivenessDetector.hashGoalState(ctx.goalStack().all());
 
                 Observations obs      = agent.perception().perceive(ctx);
                 ctx.transitionTo(RunState.MODEL_CALL);
                 Decision     decision = agent.reasoning().decide(ctx, obs);
                 ctx.transitionTo(RunState.PLANNING);
 
-                // N2: stuck-state detector
-                if (isNonProgressDecision(decision)) {
-                    ctx.incrementStuckCycles();
-                    if (ctx.stuckCycles() >= MAX_STUCK_CYCLES) {
-                        ctx.setTerminationReason(new TerminationReason.Escalated(
-                            "Agent stuck: " + ctx.stuckCycles() +
-                            " consecutive cycles with no tool call and no terminal response"));
-                        emit(ctx, AgentEvent.EventType.STUCK_STATE_DETECTED,
-                            Map.of("cycles", ctx.stuckCycles(),
-                                   "lastDecision", decision.getClass().getSimpleName()));
-                        ctx.transitionTo(RunState.TERMINATED);
-                        return;
-                    }
-                } else {
-                    ctx.resetStuckCycles();
-                }
+                // N2: stuck-state check
+                liveness.checkStuck(decision, ctx).ifPresent(reason -> {
+                    terminate(ctx, reason, AgentEvent.EventType.STUCK_STATE_DETECTED,
+                        Map.of("cycles", ctx.stuckCycles(),
+                               "lastDecision", decision.getClass().getSimpleName()));
+                });
+                if (!ctx.currentState().isLive()) return;
 
                 ValidationResult validation = validator.validate(decision, ctx);
                 switch (validation) {
+
                     case ValidationResult.Passed p -> {
                         ctx.transitionTo(RunState.TOOL_EXECUTION);
                         ActionResult result = agent.action().execute(decision, ctx);
                         ctx.transitionTo(RunState.MEMORY_UPDATE);
                         new Review(validator, events).step(result, decision, obs, ctx, agent);
+                        if (!ctx.currentState().isLive()) return;
 
-                        // N1: stagnation detector — compare goal hash after cycle completes
-                        String postGoalHash = hashGoalState(ctx.goalStack().all());
-                        if (preGoalHash.equals(postGoalHash) && isToolOrAnswer(decision)
-                                && (ctx.cycleCount() + 1) < ctx.task().maxCycles()) {
-                            ctx.incrementStagnantCycles();
-                            if (ctx.stagnantCycles() >= MAX_STAGNANT_CYCLES) {
-                                ctx.setTerminationReason(new TerminationReason.Escalated(
-                                    "Goal state unchanged for " + ctx.stagnantCycles() +
-                                    " consecutive cycles — possible infinite loop"));
-                                emit(ctx, AgentEvent.EventType.GOAL_STAGNATION_DETECTED,
+                        // N1: stagnation check
+                        String postGoalHash = DefaultLivenessDetector.hashGoalState(ctx.goalStack().all());
+                        liveness.checkStagnation(preGoalHash, postGoalHash, decision, ctx)
+                            .ifPresent(reason -> {
+                                terminate(ctx, reason, AgentEvent.EventType.GOAL_STAGNATION_DETECTED,
                                     Map.of("cycles", ctx.stagnantCycles(),
                                            "goalHash", postGoalHash));
-                                ctx.transitionTo(RunState.TERMINATED);
-                                return;
-                            }
-                        } else {
-                            ctx.resetStagnantCycles();
-                        }
+                            });
+                        if (!ctx.currentState().isLive()) return;
 
-                        ctx.recordCycle(CycleRecord.of(ctx.cycleCount(), obs, decision, result, "ok"));
+                        ctx.recordCycle(CycleRecord.of(
+                            ctx.cycleCount(), obs, decision, result, "ok"));
                         ctx.incrementCycle();
-                        emit(ctx, AgentEvent.EventType.CYCLE_COMPLETED, Map.of("cycle", ctx.cycleCount()));
+                        emit(ctx, AgentEvent.EventType.CYCLE_COMPLETED,
+                            Map.of("cycle", ctx.cycleCount()));
                         if (!ctx.currentState().isTerminal()) ctx.transitionTo(RunState.VALIDATING);
                     }
+
                     case ValidationResult.NeedsCorrection nc -> {
                         if (ctx.isRevisionBudgetExceeded(3)) {
-                            ctx.setTerminationReason(new TerminationReason.Escalated("Correction budget exhausted"));
-                            ctx.transitionTo(RunState.TERMINATED);
+                            terminate(ctx,
+                                new TerminationReason.PlanIncoherent(
+                                    "Revision budget exhausted: " + nc.reason()),
+                                AgentEvent.EventType.PLAN_STALE,
+                                Map.of("reason", nc.reason()));
                         } else {
                             ctx.incrementRevisionCount();
                             ctx.flagPlanStale(nc.reason());
                             ctx.transitionTo(RunState.VALIDATING);
                         }
                     }
-                    case ValidationResult.Failed f -> {
-                        ctx.setTerminationReason(new TerminationReason.Escalated(f.reason()));
-                        ctx.transitionTo(RunState.TERMINATED);
-                    }
+
+                    case ValidationResult.Failed f -> terminate(ctx,
+                        new TerminationReason.PlanIncoherent(f.reason()),
+                        AgentEvent.EventType.PLAN_STALE,
+                        Map.of("reason", f.reason()));
                 }
             }
 
             case SUSPENDED_HITL, WAITING_FOR_JOB -> {
-                ctx.setTerminationReason(new TerminationReason.FailureEscalation(
-                    "State " + ctx.currentState() + " requires an async runtime. " +
-                    "Implement an async AgentRuntime that handles SUSPENDED_HITL via ExecutionStore."));
-                ctx.transitionTo(RunState.ABORTED);
+                // Synchronous runner cannot block on human input.
+                // AsyncAgentRuntime handles these states via ExecutionStore.
+                terminate(ctx,
+                    new TerminationReason.Escalated(
+                        "State " + ctx.currentState() + " requires AsyncAgentRuntime."),
+                    AgentEvent.EventType.HITL_REQUESTED,
+                    Map.of("state", ctx.currentState().name()));
             }
 
-            case DEGRADED -> {
-                ctx.setTerminationReason(new TerminationReason.FailureEscalation("Degraded state"));
-                ctx.transitionTo(RunState.ABORTED);
-            }
+            case DEGRADED -> terminate(ctx,
+                new TerminationReason.FailureEscalation("Agent entered DEGRADED state"),
+                AgentEvent.EventType.RUN_ABORTED, Map.of());
 
             default -> {}
-        }
-    }
-
-    /** N2: progress requires a tool call, parallel call, final answer, or escalation. */
-    private static boolean isNonProgressDecision(Decision d) {
-        return !(d instanceof ToolCall)
-            && !(d instanceof ParallelToolCalls)
-            && !(d instanceof FinalAnswer)
-            && !(d instanceof Escalate);
-    }
-
-    /** N1: only count stagnation when the agent actually attempted tool work or gave an answer. */
-    private static boolean isToolOrAnswer(Decision d) {
-        return d instanceof ToolCall || d instanceof ParallelToolCalls || d instanceof FinalAnswer;
-    }
-
-    /**
-     * N1: SHA-256 over "id=STATUS" pairs for every goal in the stack.
-     * Returns first 8 hex chars — sufficient for per-run stagnation detection.
-     */
-    private static String hashGoalState(List<Goal> goals) {
-        String canonical = goals.stream()
-            .map(g -> g.id() + "=" + g.status().name())
-            .collect(Collectors.joining(","));
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] d = md.digest(canonical.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(16);
-            for (int i = 0; i < 4; i++) sb.append(String.format("%02x", d[i]));
-            return sb.toString();
-        } catch (Exception e) {
-            return canonical; // fallback: plain string comparison
         }
     }
 
@@ -227,16 +181,26 @@ class StateMachineRunner {
         if (ctx.totalTokensUsed() >= t.maxTokens())
             return new TerminationReason.ResourceLimit("Max tokens: " + t.maxTokens());
         if (t.maxWallClockTime() != null) {
-            java.time.Duration elapsed = java.time.Duration.between(ctx.startTime(), Instant.now());
+            java.time.Duration elapsed =
+                java.time.Duration.between(ctx.startTime(), Instant.now());
             if (elapsed.compareTo(t.maxWallClockTime()) >= 0)
-                return new TerminationReason.ResourceLimit("Wall clock exceeded");
+                return new TerminationReason.ResourceLimit("Wall-clock limit exceeded");
         }
-        if (t.budgetLimit() != null && ctx.totalCost().compareTo(t.budgetLimit()) >= 0)
-            return new TerminationReason.ResourceLimit("Budget exceeded");
+        if (t.budgetLimit() != null
+                && ctx.totalCost().compareTo(t.budgetLimit()) >= 0)
+            return new TerminationReason.ResourceLimit("Budget limit exceeded");
         return null;
     }
 
-    private void emit(ExecutionContext ctx, AgentEvent.EventType type, Map<String,Object> attrs) {
-        events.emit(new AgentEvent(ctx.runId(), ctx.tenantId(), type, Instant.now(), attrs));
+    private void terminate(ExecutionContext ctx, TerminationReason reason,
+                           AgentEvent.EventType eventType, Map<String, Object> attrs) {
+        ctx.setTerminationReason(reason);
+        ctx.transitionTo(RunState.TERMINATED);
+        emit(ctx, eventType, attrs);
+    }
+
+    private void emit(ExecutionContext ctx, AgentEvent.EventType type, Map<String, Object> attrs) {
+        events.emit(new AgentEvent(
+            ctx.runId(), ctx.tenantId(), type, Instant.now(), attrs));
     }
 }

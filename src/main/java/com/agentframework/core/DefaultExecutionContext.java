@@ -20,8 +20,8 @@ import java.util.stream.Collectors;
  *   <li>Goals: {@code id:status} for every goal on the stack</li>
  *   <li>Working memory: {@code id:contentHash} for every entry
  *       (content is included so payload tampering is detected)</li>
- *   <li>Beliefs: {@code subject:predicate:valueHash:confidence} for every belief
- *       (values and confidence are included so silent updates are detected)</li>
+ *   <li>Beliefs: {@code subject:predicate:objectHash:confidence} for every belief
+ *       (SPO model: subject, predicate, <b>object</b> — not value)</li>
  *   <li>Liveness counters: {@code consFailures}, {@code stagnantCycles},
  *       {@code stuckCycles}, {@code revisions}</li>
  *   <li>Accumulators: {@code totalTokens}, {@code totalCost}</li>
@@ -29,8 +29,7 @@ import java.util.stream.Collectors;
  *
  * <p>{@link NoSuchAlgorithmException} from SHA-256 throws
  * {@link IllegalStateException} — SHA-256 is mandated by the JVM spec; its
- * absence indicates a non-compliant environment and must fail fast rather than
- * silently returning a dummy string that would defeat integrity verification.
+ * absence indicates a non-compliant environment and must fail fast.
  */
 public class DefaultExecutionContext implements ExecutionContext {
 
@@ -139,19 +138,15 @@ public class DefaultExecutionContext implements ExecutionContext {
 
     /**
      * Restores all mutable execution state from a persisted snapshot.
-     * Called by {@code AgentRuntime.replay()} before handing the context to the
-     * state machine runner.
-     *
-     * <p>All fields that influence agent behaviour are restored, including
-     * liveness counters.  The {@code runId} and {@code startTime} are deliberately
-     * not overwritten — the replay run has its own identity and timestamp.
+     * All liveness counters are included so an agent that exhausted its
+     * failure budget before a HITL suspend cannot reset those counters on resume.
      */
     public void restoreFromSnapshot(Snapshot snap) {
-        this.cycle        = snap.cycle();
-        this.state        = snap.state();
-        this.totalTokens  = snap.totalTokens();
-        this.totalCost    = snap.totalCost();
-        this.consFailures = snap.consecutiveFailures();
+        this.cycle          = snap.cycle();
+        this.state          = snap.state();
+        this.totalTokens    = snap.totalTokens();
+        this.totalCost      = snap.totalCost();
+        this.consFailures   = snap.consecutiveFailures();
         this.stagnantCycles = snap.stagnantCycles();
         this.stuckCycles    = snap.stuckCycles();
         this.revisions      = snap.revisionCount();
@@ -160,7 +155,7 @@ public class DefaultExecutionContext implements ExecutionContext {
         snap.beliefSnapshot().forEach(beliefState::assertBelief);
     }
 
-    // ── Static hash helpers (also used by AgentRuntime for replay verification) ─
+    // ── Static hash helpers ─────────────────────────────────────────
 
     public static String computeSnapshotHash(Snapshot snap) {
         return computeHash(
@@ -178,9 +173,8 @@ public class DefaultExecutionContext implements ExecutionContext {
             List<Goal> goals, List<WorkingMemoryEntry> wm,
             List<Belief> beliefs, int tokens, BigDecimal cost,
             int consFailures, int stagnantCycles, int stuckCycles, int revisions) {
-        // SHA-256 is mandated by the Java Security spec. NoSuchAlgorithmException
-        // means the JVM is non-compliant; we must not silently degrade.
         try {
+            // Belief uses the SPO model: subject / predicate / object (not 'value').
             String canonical = runId + "|" + state + "|" + cycle
                 + "|goals=" + goals.stream()
                     .map(g -> g.id() + ":" + g.status())
@@ -190,7 +184,7 @@ public class DefaultExecutionContext implements ExecutionContext {
                     .collect(Collectors.joining(","))
                 + "|beliefs=" + beliefs.stream()
                     .map(b -> b.subject() + ":" + b.predicate()
-                        + ":" + contentHash(b.value())
+                        + ":" + contentHash(b.object())   // SPO: field is 'object'
                         + ":" + b.confidence())
                     .collect(Collectors.joining(","))
                 + "|liveness=" + consFailures + ":" + stagnantCycles
@@ -206,18 +200,15 @@ public class DefaultExecutionContext implements ExecutionContext {
 
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(
-                "SHA-256 algorithm unavailable — JVM environment is non-compliant. "
-                + "This indicates a missing security provider or a stripped-down JRE.", e);
+                "SHA-256 algorithm unavailable — JVM environment is non-compliant.", e);
         }
     }
 
-    /** Stable content fingerprint using SHA-256; falls back to identity hash on null. */
     private static String contentHash(Object obj) {
         if (obj == null) return "null";
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                 .digest(obj.toString().getBytes(StandardCharsets.UTF_8));
-            // 8-hex-char prefix is sufficient for within-snapshot collision resistance
             StringBuilder sb = new StringBuilder(8);
             for (int i = 0; i < 4; i++) sb.append(String.format("%02x", digest[i]));
             return sb.toString();

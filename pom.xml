@@ -15,9 +15,9 @@
     <maven.compiler.source>${java.version}</maven.compiler.source>
     <maven.compiler.target>${java.version}</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <!-- Dependency versions -->
     <micrometer.version>1.13.3</micrometer.version>
     <opentelemetry.version>1.40.0</opentelemetry.version>
+    <jackson.version>2.17.2</jackson.version>
     <junit.version>5.11.0</junit.version>
     <mockito.version>5.12.0</mockito.version>
     <checkstyle.version>10.18.1</checkstyle.version>
@@ -37,6 +37,13 @@
       <groupId>io.opentelemetry</groupId>
       <artifactId>opentelemetry-api</artifactId>
       <version>${opentelemetry.version}</version>
+    </dependency>
+
+    <!-- Jackson Databind — used by ReActStrategy for robust JSON parsing -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
     </dependency>
 
     <!-- Test scope -->
@@ -85,7 +92,7 @@
         </configuration>
       </plugin>
 
-      <!-- Checkstyle (CI-01): violations break the build -->
+      <!-- Checkstyle: violations break the build -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-checkstyle-plugin</artifactId>
@@ -113,7 +120,7 @@
         </executions>
       </plugin>
 
-      <!-- JaCoCo (C3-01): 80% line / 75% branch -->
+      <!-- JaCoCo: 80% line / 75% branch minimum -->
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>

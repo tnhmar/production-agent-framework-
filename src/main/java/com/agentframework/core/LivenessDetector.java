@@ -1,5 +1,6 @@
 package com.agentframework.core;
 
+import com.agentframework.foundation.Decision;
 import com.agentframework.foundation.TerminationReason;
 
 import java.util.Optional;

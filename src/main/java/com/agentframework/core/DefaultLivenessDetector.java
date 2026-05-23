@@ -1,6 +1,11 @@
 package com.agentframework.core;
 
+import com.agentframework.foundation.Decision;
+import com.agentframework.foundation.Escalate;
+import com.agentframework.foundation.FinalAnswer;
+import com.agentframework.foundation.ParallelToolCalls;
 import com.agentframework.foundation.TerminationReason;
+import com.agentframework.foundation.ToolCall;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -50,7 +55,6 @@ public class DefaultLivenessDetector implements LivenessDetector {
     @Override
     public Optional<TerminationReason> checkStagnation(
             String preHash, String postHash, Decision decision, ExecutionContext ctx) {
-        // Only evaluate stagnation when the agent attempted real work
         if (!isSubstantiveDecision(decision)) {
             return Optional.empty();
         }
@@ -89,10 +93,6 @@ public class DefaultLivenessDetector implements LivenessDetector {
     /**
      * Computes a SHA-256-based hash over the id and status of every goal
      * on the stack.  Returns the full 64-character hex digest.
-     *
-     * <p>Using only {@code id:status} is intentional: the detector needs to know
-     * whether goal <em>progress</em> was made (status changed), not whether
-     * beliefs or memory changed.  Those are covered by the snapshot hash.
      */
     public static String hashGoalState(List<Goal> goals) {
         String canonical = goals.stream()

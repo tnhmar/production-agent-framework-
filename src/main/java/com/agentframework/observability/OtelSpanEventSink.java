@@ -12,20 +12,8 @@ import java.util.Objects;
  * Decorator {@link EventSink} that wraps a delegate and creates an
  * OpenTelemetry span for every agent event.
  *
- * <h3>Design</h3>
- * <ul>
- *   <li>Span name: {@code agent.<event_type_lower_snake>} (e.g.
- *       {@code agent.cycle_completed}).</li>
- *   <li>Attributes: {@code agent.run_id}, {@code agent.tenant_id}.</li>
- *   <li>If the event has a {@code severity=ERROR} attribute the span is
- *       marked with {@link StatusCode#ERROR}.</li>
- *   <li>Span is always ended in a {@code finally} block — no span leaks.</li>
- *   <li>The delegate {@link EventSink} is always called regardless of span
- *       errors, so observability failures never disrupt agent execution.</li>
- * </ul>
- *
- * <p>The {@link Tracer} is constructor-injected for testability and
- * per-service configuration.
+ * <p>Note: {@link AgentEvent} is a Java record; the event-type accessor is
+ * {@code event.type()}, NOT {@code event.eventType()}.
  */
 public class OtelSpanEventSink implements EventSink {
 
@@ -39,7 +27,8 @@ public class OtelSpanEventSink implements EventSink {
 
     @Override
     public void emit(AgentEvent event) {
-        String spanName = "agent." + toSnakeCase(event.eventType());
+        // AgentEvent record field is 'type', not 'eventType'
+        String spanName = "agent." + toSnakeCase(event.type());
         Span span = tracer.spanBuilder(spanName).startSpan();
         try {
             span.setAttribute("agent.run_id",    event.runId()    != null ? event.runId()    : "");

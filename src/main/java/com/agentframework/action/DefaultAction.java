@@ -1,44 +1,80 @@
 package com.agentframework.action;
+
 import com.agentframework.action.middleware.*;
 import com.agentframework.core.ExecutionContext;
 import com.agentframework.foundation.*;
+import com.agentframework.observability.EventSink;
+
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+
+/**
+ * Default {@link Action} implementation wiring a 4-layer validation stack,
+ * middleware pipeline, and parallel fan-out executor.
+ *
+ * <h3>Validation stack (in order)</h3>
+ * <ol>
+ *   <li>{@link SchemaActionValidator}   — arity and type checks</li>
+ *   <li>{@link SemanticActionValidator} — semantic consistency</li>
+ *   <li>{@link SafetyActionValidator}   — pre-execution approval gate</li>
+ *   <li>{@link com.agentframework.security.SecurityEnforcer} — policy hard-fail</li>
+ *   <li>{@link TaintActionValidator}    — HOSTILE taint propagation block</li>
+ * </ol>
+ *
+ * <p>{@link TaintActionValidator} requires an {@link EventSink} for audit events.
+ * Pass the same sink used by the rest of the framework via
+ * {@link #withDefaultValidators}.
+ */
 public class DefaultAction implements Action {
-    private final ToolRegistry        registry;
+
+    private final ToolRegistry          registry;
     private final List<ActionValidator> validators;
-    private final ToolMiddleware      middleware;
-    private final ToolDispatcher      dispatcher;
-    private final ExecutorService     executor;
+    private final ToolMiddleware        middleware;
+    private final ToolDispatcher        dispatcher;
+    private final ExecutorService       executor;
 
     /**
-     * Canonical factory: wires the full 4-layer validation stack defined in the spec:
-     * Schema → Semantic → Policy/Security → Safety/Taint.
-     * Callers may substitute a custom validator list via the constructor overloads.
+     * Canonical factory — wires the full validation stack.
+     *
+     * @param eventSink the shared event sink used throughout the framework;
+     *                  forwarded to {@link TaintActionValidator} for audit events.
      */
     public static DefaultAction withDefaultValidators(
-            ToolRegistry registry, ToolMiddleware middleware, ToolDispatcher dispatcher,
-            com.agentframework.security.SecurityEnforcer securityEnforcer) {
+            ToolRegistry registry,
+            ToolMiddleware middleware,
+            ToolDispatcher dispatcher,
+            com.agentframework.security.SecurityEnforcer securityEnforcer,
+            EventSink eventSink) {
         return new DefaultAction(registry,
-            List.of(new SchemaActionValidator(),
-                    new SemanticActionValidator(),
-                    new SafetyActionValidator(),    // IC2 fix: approval gate before policy hard-fail
-                    securityEnforcer,
-                    new TaintActionValidator()),
+            List.of(
+                new SchemaActionValidator(),
+                new SemanticActionValidator(),
+                new SafetyActionValidator(),
+                securityEnforcer,
+                new TaintActionValidator(eventSink)),   // requires EventSink
             middleware, dispatcher);
     }
 
     public DefaultAction(ToolRegistry registry, List<ActionValidator> validators,
                          ToolMiddleware middleware, ToolDispatcher dispatcher) {
         this(registry, validators, middleware, dispatcher,
-             Executors.newFixedThreadPool(4, r -> { Thread t=new Thread(r,"tool-exec"); t.setDaemon(true); return t; }));
+            Executors.newFixedThreadPool(4, r -> {
+                Thread t = new Thread(r, "tool-exec");
+                t.setDaemon(true);
+                return t;
+            }));
     }
+
     public DefaultAction(ToolRegistry registry, List<ActionValidator> validators,
-                         ToolMiddleware middleware, ToolDispatcher dispatcher, ExecutorService executor) {
-        this.registry=registry; this.validators=validators;
-        this.middleware=middleware; this.dispatcher=dispatcher; this.executor=executor;
+                         ToolMiddleware middleware, ToolDispatcher dispatcher,
+                         ExecutorService executor) {
+        this.registry   = registry;
+        this.validators = validators;
+        this.middleware = middleware;
+        this.dispatcher = dispatcher;
+        this.executor   = executor;
     }
 
     public ActionResult execute(Decision decision, ExecutionContext ctx) {
@@ -66,7 +102,8 @@ public class DefaultAction implements Action {
                 try { return dispatcher.dispatch(i); }
                 catch (ToolException e) { throw new RuntimeException(e); }
             });
-            ctx.addTokens(r.tokensUsed()); ctx.addCost(r.cost());
+            ctx.addTokens(r.tokensUsed());
+            ctx.addCost(r.cost());
             return ActionResult.success(r);
         } catch (RuntimeException e) {
             Throwable cause = e.getCause() instanceof ToolException te ? te : e;
@@ -77,7 +114,6 @@ public class DefaultAction implements Action {
 
     private ActionResult executeParallel(ParallelToolCalls p, ExecutionContext ctx) {
         List<ToolCall> calls = p.calls();
-        // validate all first
         for (ToolCall tc : calls) {
             ToolContract c = registry.lookup(tc.toolName());
             if (c == null) return ActionResult.failure("UNKNOWN_TOOL", tc.toolName());

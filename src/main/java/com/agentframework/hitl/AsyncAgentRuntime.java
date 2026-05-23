@@ -4,6 +4,7 @@ import com.agentframework.core.*;
 import com.agentframework.foundation.*;
 import com.agentframework.observability.*;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
@@ -14,30 +15,22 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Asynchronous agent runtime that supports Human-in-the-Loop (HITL) pause
- * and resume via a durable {@link ExecutionStore}.
+ * Asynchronous agent runtime with Human-in-the-Loop (HITL) pause/resume.
  *
  * <h3>HITL flow</h3>
  * <ol>
- *   <li>{@link #suspend} starts the agent on the async pool.  If the run
- *       terminates naturally (goal complete, limits hit) the result is
- *       delivered to the caller's {@link CompletableFuture} immediately.</li>
- *   <li>If the {@link StateMachineRunner} exits with state
- *       {@link RunState#SUSPENDED_HITL}, the context is
- *       {@link ExecutionContext#checkpoint() checkpointed} and stored in
- *       {@link ExecutionStore} keyed by a fresh {@link JobToken}.  The
- *       {@link JobToken} is written into the context's {@code activeJobs}
- *       map so the agent's HITL middleware can surface it to the approver.</li>
- *   <li>The human operator calls {@link #resume(JobToken, ApprovalDecision, Agent)}
- *       which restores the snapshot, injects the approval decision as a
- *       CLEAN working-memory entry, and re-runs the state machine.</li>
- *   <li>The caller's original {@link CompletableFuture} is completed when
- *       the resumed run finishes.</li>
+ *   <li>{@link #suspend} starts the agent on the async pool and returns a
+ *       {@link CompletableFuture} immediately.</li>
+ *   <li>If {@link StateMachineRunner} exits with {@link RunState#SUSPENDED_HITL},
+ *       the context is check-pointed, the snapshot is stored in
+ *       {@link ExecutionStore} under a new {@link JobToken}, and the future
+ *       is parked in {@code pendingFutures}.</li>
+ *   <li>The operator calls {@link #resume(JobToken, ApprovalDecision, Agent)},
+ *       which loads and integrity-verifies the snapshot, restores the context,
+ *       injects the approval decision into working memory, and re-runs.</li>
+ *   <li>The original {@link CompletableFuture} is completed when the resumed
+ *       run finishes.</li>
  * </ol>
- *
- * <p>All state is thread-safe: the pending-future map uses
- * {@link ConcurrentHashMap} and the {@link ExecutionStore} contract requires
- * atomic put/get semantics.
  */
 public class AsyncAgentRuntime {
 
@@ -53,10 +46,6 @@ public class AsyncAgentRuntime {
         this(validator, events, store, defaultPool());
     }
 
-    /**
-     * Full constructor — callers supply a bounded, per-tenant executor to prevent
-     * one tenant's blocked HITL runs from exhausting the shared thread pool.
-     */
     public AsyncAgentRuntime(PlanValidator validator, EventSink events,
                               ExecutionStore store, ExecutorService pool) {
         this.validator = Objects.requireNonNull(validator, "validator");
@@ -67,19 +56,8 @@ public class AsyncAgentRuntime {
 
     // ── Public API ────────────────────────────────────────────────
 
-    /**
-     * Starts an agent run asynchronously.
-     *
-     * <p>If the run terminates naturally the returned future is completed with
-     * the {@link ExecutionResult}.  If the run is suspended for HITL, the future
-     * remains pending until {@link #resume} is called.
-     *
-     * @return a {@link CompletableFuture} that completes when the run finishes
-     *         (including after HITL resume cycles)
-     */
     public CompletableFuture<ExecutionResult> suspend(
             Agent agent, Task task, String tenantId, String userId) {
-
         CompletableFuture<ExecutionResult> future = new CompletableFuture<>();
         CompletableFuture.runAsync(
             () -> runWithHitlSupport(agent, task, tenantId, userId, future),
@@ -88,50 +66,46 @@ public class AsyncAgentRuntime {
     }
 
     /**
-     * Resumes a suspended run.
+     * Resumes a suspended HITL run.
      *
-     * <p>Steps:
-     * <ol>
-     *   <li>Loads and integrity-verifies the snapshot from {@link ExecutionStore}.</li>
-     *   <li>Restores a fresh {@link DefaultExecutionContext}.</li>
-     *   <li>Injects the approval decision as a CLEAN-tainted SYSTEM working-memory
-     *       entry so the agent's reasoning engine can act on it in the next cycle.</li>
-     *   <li>Submits the resumed run on the async pool.</li>
-     * </ol>
-     *
-     * @param token    the token returned when the run was first suspended
-     * @param decision the human operator's approval or rejection decision
+     * @param token    the token issued when the run was suspended
+     * @param decision the operator's approval/rejection/modification
      * @param agent    the agent implementation (same one used in {@link #suspend})
-     * @return a future that completes when the resumed run finishes
-     * @throws IllegalStateException    if no snapshot exists for the token
-     * @throws IllegalArgumentException if snapshot integrity verification fails
      */
     public CompletableFuture<ExecutionResult> resume(
             JobToken token, ApprovalDecision decision, Agent agent) {
 
-        ExecutionContext.Snapshot snap = store.load(token.id())
+        // 1. Load snapshot — keyed by the token's jobId (the persisted runId)
+        ExecutionContext.Snapshot snap = store.load(token.jobId())
             .orElseThrow(() -> new IllegalStateException(
-                "No snapshot found for jobToken=" + token.id()));
+                "No snapshot found for jobToken=" + token.jobId()));
 
+        // 2. Verify integrity before restoring any state
         verifyIntegrity(snap);
 
+        // 3. Restore context
         Task replayTask = buildReplayTask(snap);
         DefaultExecutionContext ctx = new DefaultExecutionContext(
             replayTask, snap.runId(), "hitl-resume-user");
         ctx.restoreFromSnapshot(snap);
 
-        // Inject the approval outcome into working memory as a CLEAN system entry
+        // 4. Inject operator decision as a CLEAN SYSTEM working-memory entry
+        String decisionText = switch (decision) {
+            case ApprovalDecision.Approved a  -> "HITL_DECISION: APPROVED";
+            case ApprovalDecision.Rejected r  -> "HITL_DECISION: REJECTED | " + r.reason();
+            case ApprovalDecision.Modified m  -> "HITL_DECISION: MODIFIED | tool=" + m.updatedCall().toolName();
+            case ApprovalDecision.Escalated e -> "HITL_DECISION: ESCALATED | " + e.reason();
+        };
         ctx.workingMemory().add(new WorkingMemoryEntry(
             UUID.randomUUID().toString(),
-            "HITL_DECISION: " + decision.type().name()
-                + (decision.comment() != null ? " | " + decision.comment() : ""),
+            decisionText,
             WorkingMemoryTier.ACTIVE,
             Origin.SYSTEM,
             1.0,
             Instant.now(),
             TaintLabel.CLEAN));
 
-        // Transition back to VALIDATING so the state machine resumes from the right phase
+        // 5. Transition to VALIDATING so the state machine re-enters from the right phase
         ctx.transitionTo(RunState.VALIDATING);
 
         CompletableFuture<ExecutionResult> future =
@@ -146,23 +120,19 @@ public class AsyncAgentRuntime {
     }
 
     /**
-     * Returns the current status of a suspended job without blocking.
-     *
-     * @return {@link JobStatus#PENDING} if awaiting resume,
-     *         {@link JobStatus#COMPLETED} if finished,
-     *         {@link JobStatus#NOT_FOUND} if the token is unknown
+     * Non-blocking status poll for a suspended job.
      */
     public JobStatus query(JobToken token) {
-        if (store.load(token.id()).isEmpty()) return JobStatus.NOT_FOUND;
-        CompletableFuture<ExecutionResult> f = pendingFutures.get(token.id());
-        if (f == null)        return JobStatus.NOT_FOUND;
-        if (f.isDone())       return JobStatus.COMPLETED;
+        if (store.load(token.jobId()).isEmpty()) return JobStatus.NOT_FOUND;
+        CompletableFuture<ExecutionResult> f = pendingFutures.get(token.jobId());
+        if (f == null)  return JobStatus.NOT_FOUND;
+        if (f.isDone()) return JobStatus.COMPLETED;
         return JobStatus.PENDING;
     }
 
     public enum JobStatus { PENDING, COMPLETED, NOT_FOUND }
 
-    // ── Internal execution helpers ──────────────────────────────────────
+    // ── Internal helpers ────────────────────────────────────────────
 
     private void runWithHitlSupport(
             Agent agent, Task task, String tenantId, String userId,
@@ -181,16 +151,38 @@ public class AsyncAgentRuntime {
             new StateMachineRunner(validator, events).run(agent, ctx);
 
             if (ctx.currentState() == RunState.SUSPENDED_HITL) {
-                // Checkpoint and park — the future stays pending until resume()
+                // Checkpoint, store, and park the future until resume()
                 ExecutionContext.Snapshot snap = ctx.checkpoint();
                 String tokenId = UUID.randomUUID().toString();
-                store.save(tokenId, snap);
-                JobToken token = new JobToken(tokenId);
+                // ExecutionStore.save() is 1-arg; the snapshot carries its own runId.
+                // We store under the generated tokenId by setting snap.runId = tokenId
+                // via the store's own keying contract — here we wrap to honour the interface:
+                store.save(new ExecutionContext.Snapshot() {
+                    public String               runId()                  { return tokenId; }
+                    public RunState             state()                  { return snap.state(); }
+                    public int                  cycle()                  { return snap.cycle(); }
+                    public String               schemaVersion()          { return snap.schemaVersion(); }
+                    public List<Goal>           goalStackSnapshot()      { return snap.goalStackSnapshot(); }
+                    public List<WorkingMemoryEntry> workingMemorySnapshot() { return snap.workingMemorySnapshot(); }
+                    public List<Belief>         beliefSnapshot()         { return snap.beliefSnapshot(); }
+                    public int                  totalTokens()            { return snap.totalTokens(); }
+                    public java.math.BigDecimal totalCost()              { return snap.totalCost(); }
+                    public int                  consecutiveFailures()    { return snap.consecutiveFailures(); }
+                    public int                  stagnantCycles()         { return snap.stagnantCycles(); }
+                    public int                  stuckCycles()            { return snap.stuckCycles(); }
+                    public int                  revisionCount()          { return snap.revisionCount(); }
+                    public String               integrityHash()          { return snap.integrityHash(); }
+                });
+                // 3-field JobToken: jobId, statusEndpoint, estimatedDuration
+                JobToken token = new JobToken(
+                    tokenId,
+                    "/api/v1/jobs/" + tokenId + "/status",
+                    Duration.ofMinutes(30));
                 ctx.activeJobs().put(tokenId, token);
                 pendingFutures.put(ctx.runId(), future);
                 emit(ctx, AgentEvent.EventType.HITL_REQUESTED,
                     Map.of("jobToken", tokenId));
-                // Do NOT complete the future here — it completes in resume()
+                // Future stays pending — completed in resume()
             } else {
                 emit(ctx, AgentEvent.EventType.RUN_COMPLETED,
                     Map.of("state", ctx.currentState().name()));

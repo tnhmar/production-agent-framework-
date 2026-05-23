@@ -9,33 +9,23 @@ import java.util.concurrent.ConcurrentHashMap;
  * Production {@link EventSink} backed by a Micrometer {@link MeterRegistry}.
  *
  * <h3>Metrics emitted</h3>
- * <table>
- *   <caption>Metric catalogue</caption>
- *   <tr><th>Metric</th><th>Type</th><th>Tags</th></tr>
- *   <tr><td>{@link MetricNames#AGENT_EVENT_TOTAL}</td><td>Counter</td>
- *       <td>event_type, tenant_id</td></tr>
- *   <tr><td>{@link MetricNames#AGENT_CYCLE_LATENCY_MS}</td><td>DistributionSummary</td>
- *       <td>tenant_id</td></tr>
- *   <tr><td>{@link MetricNames#AGENT_TOKENS_PER_CYCLE}</td><td>DistributionSummary</td>
- *       <td>tenant_id</td></tr>
- *   <tr><td>{@link MetricNames#AGENT_HOSTILE_TAINTS}</td><td>Counter</td>
- *       <td>severity, tenant_id</td></tr>
- *   <tr><td>{@link MetricNames#AGENT_HITL_SUSPENSIONS}</td><td>Counter</td>
- *       <td>tenant_id</td></tr>
- *   <tr><td>{@link MetricNames#AGENT_RUNS_ACTIVE}</td><td>Gauge (net)</td>
- *       <td>tenant_id</td></tr>
- * </table>
+ * <ul>
+ *   <li>{@link MetricNames#AGENT_EVENT_TOTAL} — Counter (event_type, tenant_id)</li>
+ *   <li>{@link MetricNames#AGENT_CYCLE_LATENCY_MS} — DistributionSummary (tenant_id)</li>
+ *   <li>{@link MetricNames#AGENT_TOKENS_PER_CYCLE} — DistributionSummary (tenant_id)</li>
+ *   <li>{@link MetricNames#AGENT_HOSTILE_TAINTS} — Counter (severity, tenant_id)</li>
+ *   <li>{@link MetricNames#AGENT_HITL_SUSPENSIONS} — Counter (tenant_id)</li>
+ *   <li>{@link MetricNames#AGENT_RUNS_ACTIVE} — Gauge (tenant_id)</li>
+ * </ul>
  *
- * <p>The {@link MeterRegistry} is constructor-injected; never obtained from
- * {@code Metrics.globalRegistry} to preserve per-test and per-tenant isolation.
+ * <p>Note: {@link AgentEvent} is a Java record; the event-type accessor is
+ * {@code event.type()}, NOT {@code event.eventType()}.
  */
 public class MicrometerEventSink implements EventSink {
 
     private final MeterRegistry registry;
-    // Tracks per-tenant active run counts for the gauge metric
     private final ConcurrentHashMap<String, AtomicInteger> activeRuns =
         new ConcurrentHashMap<>();
-    // Tracks cycle start time (by runId) for latency computation
     private final ConcurrentHashMap<String, Long> cycleStartNs =
         new ConcurrentHashMap<>();
 
@@ -45,24 +35,22 @@ public class MicrometerEventSink implements EventSink {
 
     @Override
     public void emit(AgentEvent event) {
-        String tenantId  = event.tenantId()  != null ? event.tenantId()  : "unknown";
-        String eventType = event.eventType() != null ? event.eventType().name() : "UNKNOWN";
-        String runId     = event.runId()     != null ? event.runId()     : "unknown";
+        // AgentEvent record field is 'type', not 'eventType'
+        String tenantId  = event.tenantId() != null ? event.tenantId() : "unknown";
+        String eventType = event.type()     != null ? event.type().name() : "UNKNOWN";
+        String runId     = event.runId()    != null ? event.runId()     : "unknown";
         Map<String, Object> attrs = event.attributes() != null
             ? event.attributes() : Map.of();
 
-        // General event counter — every event increments this
         Counter.builder(MetricNames.AGENT_EVENT_TOTAL)
             .tags("event_type", eventType, "tenant_id", tenantId)
             .register(registry)
             .increment();
 
-        // Type-specific metrics
-        switch (event.eventType()) {
+        switch (event.type()) {
 
             case RUN_STARTED -> {
-                activeRuns.computeIfAbsent(tenantId,
-                    k -> new AtomicInteger(0)).incrementAndGet();
+                activeRuns.computeIfAbsent(tenantId, k -> new AtomicInteger(0)).incrementAndGet();
                 Gauge.builder(MetricNames.AGENT_RUNS_ACTIVE,
                     activeRuns.computeIfAbsent(tenantId, k -> new AtomicInteger(0)),
                     AtomicInteger::get)
@@ -111,11 +99,10 @@ public class MicrometerEventSink implements EventSink {
                     .register(registry)
                     .increment();
 
-            default -> {} // All other types are covered by the general counter above
+            default -> {}
         }
     }
 
-    /** Simple thread-safe integer holder for gauge tracking. */
     private static final class AtomicInteger {
         private volatile int value;
         AtomicInteger(int v) { this.value = v; }

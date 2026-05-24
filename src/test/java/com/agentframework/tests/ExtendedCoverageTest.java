@@ -13,6 +13,7 @@ import com.agentframework.perception.*;
 import com.agentframework.reasoning.*;
 import com.agentframework.reasoning.strategy.ReActStrategy;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -151,6 +152,11 @@ public class ExtendedCoverageTest {
     }
 
     // ── 4. replay integrity tamper ────────────────────────────────────────────
+    //
+    // ExecutionContext.Snapshot is an interface; the concrete type produced by
+    // checkpoint() is DefaultExecutionContext.FullSnapshot (a record with 14
+    // components).  We build a structurally identical copy but substitute
+    // "TAMPERED_HASH" for the real integrityHash to exercise verifyIntegrity().
 
     @Test
     public void replay_tamperedSnapshot_throwsIllegalArgument() {
@@ -161,11 +167,22 @@ public class ExtendedCoverageTest {
         runtime().executeWith(agent, ctx);
         ExecutionContext.Snapshot good = ctx.checkpoint();
 
-        ExecutionContext.Snapshot tampered = new ExecutionContext.Snapshot(
-                good.runId(), good.tenantId(), good.userId(), good.cycle(),
-                good.state(), good.cycleRecords(), good.goalStackSnapshot(),
-                good.workingMemorySnapshot(), good.beliefs(),
-                "TAMPERED_HASH");
+        // Build a tampered FullSnapshot via the 14-arg record constructor.
+        ExecutionContext.Snapshot tampered = new DefaultExecutionContext.FullSnapshot(
+                good.runId(),
+                good.state(),
+                good.cycle(),
+                DefaultExecutionContext.SNAPSHOT_SCHEMA_VERSION,
+                good.goalStackSnapshot(),
+                good.workingMemorySnapshot(),
+                good.beliefSnapshot(),
+                good.totalTokens(),
+                good.totalCost(),
+                good.consecutiveFailures(),
+                good.stagnantCycles(),
+                good.stuckCycles(),
+                good.revisionCount(),
+                "TAMPERED_HASH");   // ← wrong hash
 
         assertThrows(IllegalArgumentException.class,
                 () -> runtime().replay(tampered, agent, "t", "u"),
@@ -230,7 +247,6 @@ public class ExtendedCoverageTest {
         };
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("search").maxCycles(10).build();
-        // must not throw regardless of classifier decision
         assertDoesNotThrow(() -> rt.execute(agent, task, "t", "u"));
     }
 
@@ -252,7 +268,6 @@ public class ExtendedCoverageTest {
         };
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("belief conflict").maxCycles(15).build();
-        // Two successive ToolResult.Success values for the same subject/predicate produce a conflict
         assertDoesNotThrow(() -> rt.execute(agent, task, "t", "u"));
     }
 
@@ -409,8 +424,8 @@ public class ExtendedCoverageTest {
         Agent agent = agentWith(StubLLMProvider.finalAnswer("ev"), reg);
         Task task = Task.builder().instruction("events").maxCycles(5).build();
         rt.execute(agent, task, "t", "u");
-        assertFalse(sink.events().isEmpty(), "InMemoryEventSink must capture at least one event");
-        assertTrue(sink.events().stream()
+        assertFalse(sink.all().isEmpty(), "InMemoryEventSink must capture at least one event");
+        assertTrue(sink.all().stream()
                 .anyMatch(e -> e.type() == AgentEvent.EventType.RUN_STARTED),
                 "RUN_STARTED event must be present");
     }

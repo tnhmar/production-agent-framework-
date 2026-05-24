@@ -545,8 +545,9 @@ public class MiddlewareCoverageTest {
     @Test
     void retryMiddleware_exhaustsRetriesAndRethrows() {
         int[] calls = {0};
+        // Use null contract so defaultMaxRetries=2 applies: 1 initial + 2 retries = 3 total
         RetryMiddleware retry = new RetryMiddleware(2, 1, 1, new Random(0));
-        ToolInvocation inv = readOnlyInvocation("t", Map.of());
+        ToolInvocation inv = new ToolInvocation(null, Map.of(), ctx(), ValidationVerdict.ok());
         assertThrows(RuntimeException.class, () ->
             retry.apply(inv, i -> { calls[0]++; throw new RuntimeException("always fails"); }));
         assertEquals(3, calls[0], "1 initial + 2 retries = 3 total calls");

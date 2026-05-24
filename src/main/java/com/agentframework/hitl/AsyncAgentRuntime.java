@@ -99,8 +99,20 @@ public class AsyncAgentRuntime {
         return future;
     }
 
+    /**
+     * Returns the current status of an asynchronous job.
+     *
+     * <p>{@link InMemoryExecutionStore#load} throws
+     * {@link IllegalArgumentException} when the runId is absent rather than
+     * returning {@code null}. We treat that exception as {@link JobStatus#NOT_FOUND},
+     * which is the correct semantic: the job simply does not exist in this runtime.
+     */
     public JobStatus query(JobToken token) {
-        if (store.load(token.jobId()) == null) return JobStatus.NOT_FOUND;
+        try {
+            store.load(token.jobId());
+        } catch (IllegalArgumentException e) {
+            return JobStatus.NOT_FOUND;
+        }
         CompletableFuture<ExecutionResult> f = pendingFutures.get(token.jobId());
         if (f == null)  return JobStatus.NOT_FOUND;
         if (f.isDone()) return JobStatus.COMPLETED;

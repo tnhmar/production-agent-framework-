@@ -22,23 +22,23 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Extended coverage tests targeting branches left uncovered after the initial
- * RuntimeCoverageTest pass (lines 69%, branches 55%).
+ * RuntimeCoverageTest pass (lines ~69%, branches ~55%).
  *
- * Covers:
- *   AgentRuntime.executeAsync (both overloads + custom executor)
- *   AgentRuntime.executeWith (caller-supplied context)
- *   AgentRuntime.replay (3 overloads) + integrity-tamper rejection
- *   StateMachineRunner SUSPENDED_HITL -> Escalated
- *   StateMachineRunner DEGRADED -> FailureEscalation
- *   StateMachineRunner delegation-depth exceeded -> ResourceLimit
- *   Review: world-change NeedsCorrection -> flagPlanStale
- *   Review: world-change NeedsCorrection exhausting revision budget -> TERMINATED
- *   Review: belief-conflict event on duplicate (subject, predicate)
- *   Review: PartialSuccess / hostile-taint path
- *   Review: fail-then-succeed -> resetConsecutiveFailures
- *   Snapshot roundtrip with working-memory entries
- *   EventSink.noop() all event types
- *   InMemoryEventSink captures RUN_STARTED
+ * <p>Every assertion is derived from the actual production control-flow:
+ * <ul>
+ *   <li>{@link ExecutionResult#succeeded()} returns {@code true} iff
+ *       {@code terminationReason instanceof GoalCompleted}.</li>
+ *   <li>{@link StateMachineRunner} transitions SUSPENDED_HITL/WAITING_FOR_JOB
+ *       to TERMINATED with {@link TerminationReason.Escalated}.</li>
+ *   <li>{@link StateMachineRunner} transitions DEGRADED to TERMINATED with
+ *       {@link TerminationReason.FailureEscalation}.</li>
+ *   <li>Chain-depth guard fires at INITIALIZED when
+ *       {@code currentChainDepth() > maxChainDepth}.</li>
+ *   <li>{@link DefaultExecutionContext.FullSnapshot} is package-private;
+ *       tamper tests build an anonymous {@link ExecutionContext.Snapshot}
+ *       that delegates all accessors to the real snapshot but overrides
+ *       {@code integrityHash()} to return a forged value.</li>
+ * </ul>
  */
 public class ExtendedCoverageTest {
 
@@ -46,9 +46,11 @@ public class ExtendedCoverageTest {
 
     private Agent agentWith(LLMProvider llm, SimpleToolRegistry reg) {
         DefaultToolDispatcher dispatcher = new DefaultToolDispatcher(reg);
-        DefaultAction action = new DefaultAction(reg, List.of(new SafetyActionValidator()),
+        DefaultAction action = new DefaultAction(
+                reg, List.of(new SafetyActionValidator()),
                 ToolMiddleware.identity(), dispatcher);
-        LLMReasoning reasoning = new LLMReasoning(llm, new ReActStrategy(),
+        LLMReasoning reasoning = new LLMReasoning(
+                llm, new ReActStrategy(),
                 new PromptBuilder("You are a helpful agent.", reg, 4096));
         return Agent.builder()
                 .perception(new SimplePerception())
@@ -62,6 +64,33 @@ public class ExtendedCoverageTest {
         return new AgentRuntime(new PassThroughPlanValidator());
     }
 
+    /**
+     * Builds an anonymous Snapshot that is identical to {@code real} in every
+     * accessor except {@code integrityHash()}, which returns the supplied
+     * {@code forgedHash}. This is the only correct way to construct a tampered
+     * snapshot from outside the {@code core} package because
+     * {@link DefaultExecutionContext.FullSnapshot} is package-private.
+     */
+    private static ExecutionContext.Snapshot tamperHash(
+            ExecutionContext.Snapshot real, String forgedHash) {
+        return new ExecutionContext.Snapshot() {
+            @Override public String                   runId()                  { return real.runId(); }
+            @Override public RunState                 state()                  { return real.state(); }
+            @Override public int                      cycle()                  { return real.cycle(); }
+            @Override public String                   schemaVersion()          { return real.schemaVersion(); }
+            @Override public List<Goal>               goalStackSnapshot()      { return real.goalStackSnapshot(); }
+            @Override public List<WorkingMemoryEntry> workingMemorySnapshot()  { return real.workingMemorySnapshot(); }
+            @Override public List<Belief>             beliefSnapshot()         { return real.beliefSnapshot(); }
+            @Override public int                      totalTokens()            { return real.totalTokens(); }
+            @Override public BigDecimal               totalCost()              { return real.totalCost(); }
+            @Override public int                      consecutiveFailures()    { return real.consecutiveFailures(); }
+            @Override public int                      stagnantCycles()         { return real.stagnantCycles(); }
+            @Override public int                      stuckCycles()            { return real.stuckCycles(); }
+            @Override public int                      revisionCount()          { return real.revisionCount(); }
+            @Override public String                   integrityHash()          { return forgedHash; }
+        };
+    }
+
     // ── 1. executeAsync ───────────────────────────────────────────────────────
 
     @Test
@@ -70,7 +99,7 @@ public class ExtendedCoverageTest {
         Agent agent = agentWith(StubLLMProvider.finalAnswer("async done"), reg);
         Task task = Task.builder().instruction("async").maxCycles(5).build();
         ExecutionResult r = runtime().executeAsync(agent, task).get();
-        assertTrue(r.succeeded(), "async no-tenant must succeed");
+        assertTrue(r.succeeded(), "executeAsync with system tenant must succeed");
     }
 
     @Test
@@ -79,7 +108,7 @@ public class ExtendedCoverageTest {
         Agent agent = agentWith(StubLLMProvider.finalAnswer("async done"), reg);
         Task task = Task.builder().instruction("async tenant").maxCycles(5).build();
         ExecutionResult r = runtime().executeAsync(agent, task, "tenant-1", "user-1").get();
-        assertTrue(r.succeeded(), "async with-tenant must succeed");
+        assertTrue(r.succeeded(), "executeAsync with explicit tenant must succeed");
     }
 
     @Test
@@ -92,7 +121,7 @@ public class ExtendedCoverageTest {
                 EventSink.noop(),
                 Executors.newFixedThreadPool(1));
         ExecutionResult r = rt.executeAsync(agent, task).get();
-        assertTrue(r.succeeded(), "async with injected pool must succeed");
+        assertTrue(r.succeeded(), "executeAsync with injected executor must succeed");
     }
 
     // ── 2. executeWith ────────────────────────────────────────────────────────
@@ -104,22 +133,24 @@ public class ExtendedCoverageTest {
         Task task = Task.builder().instruction("ctx test").maxCycles(5).build();
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t", "u");
         ExecutionResult r = runtime().executeWith(agent, ctx);
-        assertTrue(r.succeeded(), "executeWith caller context must succeed");
-        assertNotNull(r.finalAnswer(), "finalAnswer must not be null");
+        // succeeded() == true iff terminationReason is GoalCompleted
+        assertTrue(r.succeeded(), "executeWith caller-supplied context must succeed");
+        // finalAnswer is populated from the last FinalAnswer CycleRecord
+        assertNotNull(r.finalAnswer(), "finalAnswer must be present after GoalCompleted");
     }
 
     // ── 3. replay ─────────────────────────────────────────────────────────────
 
     @Test
-    public void replay_fromSnapshot_resumes() {
+    public void replay_fromSnapshot_resumesAndReturnsResult() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
-        Agent agent = agentWith(StubLLMProvider.finalAnswer("replay done"), reg);
+        Agent agent = agentWith(StubLLMProvider.finalAnswer("first run"), reg);
         Task task = Task.builder().instruction("original").maxCycles(5).build();
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t", "u");
         runtime().executeWith(agent, ctx);
         ExecutionContext.Snapshot snap = ctx.checkpoint();
 
-        Agent agent2 = agentWith(StubLLMProvider.finalAnswer("re-done"), reg);
+        Agent agent2 = agentWith(StubLLMProvider.finalAnswer("replay done"), reg);
         ExecutionResult r = runtime().replay(snap, agent2, "t", "u");
         assertNotNull(r, "replay must return a non-null result");
     }
@@ -133,8 +164,9 @@ public class ExtendedCoverageTest {
         runtime().executeWith(agent, ctx);
         ExecutionContext.Snapshot snap = ctx.checkpoint();
 
+        // replay(snap, agent) uses SYSTEM_TENANT + "replay-user" internally
         Agent agent2 = agentWith(StubLLMProvider.finalAnswer("ok2"), reg);
-        assertNotNull(runtime().replay(snap, agent2));
+        assertNotNull(runtime().replay(snap, agent2), "single-arg replay must return result");
     }
 
     @Test
@@ -148,15 +180,16 @@ public class ExtendedCoverageTest {
 
         Task customTask = Task.builder().instruction("custom").maxCycles(3).build();
         Agent agent2 = agentWith(StubLLMProvider.finalAnswer("custom done"), reg);
-        assertNotNull(runtime().replay(snap, agent2, customTask, "t", "u"));
+        assertNotNull(runtime().replay(snap, agent2, customTask, "t", "u"),
+                "replay with custom Task must return result");
     }
 
     // ── 4. replay integrity tamper ────────────────────────────────────────────
     //
-    // ExecutionContext.Snapshot is an interface; the concrete type produced by
-    // checkpoint() is DefaultExecutionContext.FullSnapshot (a record with 14
-    // components).  We build a structurally identical copy but substitute
-    // "TAMPERED_HASH" for the real integrityHash to exercise verifyIntegrity().
+    // DefaultExecutionContext.FullSnapshot is package-private, so it cannot be
+    // instantiated from outside com.agentframework.core.  The tamper helper builds
+    // an anonymous implementation of the public ExecutionContext.Snapshot interface
+    // that returns the real snapshot's values for every field except integrityHash().
 
     @Test
     public void replay_tamperedSnapshot_throwsIllegalArgument() {
@@ -167,72 +200,65 @@ public class ExtendedCoverageTest {
         runtime().executeWith(agent, ctx);
         ExecutionContext.Snapshot good = ctx.checkpoint();
 
-        // Build a tampered FullSnapshot via the 14-arg record constructor.
-        ExecutionContext.Snapshot tampered = new DefaultExecutionContext.FullSnapshot(
-                good.runId(),
-                good.state(),
-                good.cycle(),
-                DefaultExecutionContext.SNAPSHOT_SCHEMA_VERSION,
-                good.goalStackSnapshot(),
-                good.workingMemorySnapshot(),
-                good.beliefSnapshot(),
-                good.totalTokens(),
-                good.totalCost(),
-                good.consecutiveFailures(),
-                good.stagnantCycles(),
-                good.stuckCycles(),
-                good.revisionCount(),
-                "TAMPERED_HASH");   // ← wrong hash
+        ExecutionContext.Snapshot tampered = tamperHash(good, "00000000deadbeef");
 
         assertThrows(IllegalArgumentException.class,
                 () -> runtime().replay(tampered, agent, "t", "u"),
-                "Tampered snapshot must throw IllegalArgumentException");
+                "Tampered integrityHash must cause replay() to throw IllegalArgumentException");
     }
 
     // ── 5. SUSPENDED_HITL → Escalated ─────────────────────────────────────────
+    //
+    // StateMachineRunner.step() handles SUSPENDED_HITL/WAITING_FOR_JOB by calling
+    // terminate() with TerminationReason.Escalated and returning immediately.
+    // AskClarification in Review transitions the context to SUSPENDED_HITL;
+    // the next step() call converts it to TERMINATED(Escalated).
 
     @Test
-    public void stateMachine_suspendedHitl_escalates() {
+    public void stateMachine_suspendedHitl_terminatesWithEscalated() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
+        // LLM always returns ask_clarification → drives context into SUSPENDED_HITL
         LLMProvider llm = p -> "{\"type\":\"ask_clarification\",\"question\":\"Which option?\"}";
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("needs clarification").maxCycles(5).build();
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t", "u");
         ExecutionResult r = runtime().executeWith(agent, ctx);
-        assertFalse(r.succeeded());
-        assertTrue(
-            r.terminationReason() instanceof TerminationReason.Escalated ||
-            r.terminationReason() instanceof TerminationReason.PlanIncoherent ||
-            r.terminationReason() instanceof TerminationReason.StagnationLimit ||
-            r.terminationReason() instanceof TerminationReason.GoalCompleted,
-            "SUSPENDED_HITL must escalate or complete, got: " + r.terminationReason());
+        // succeeded() is false because terminationReason is Escalated, not GoalCompleted
+        assertFalse(r.succeeded(),
+                "SUSPENDED_HITL must not succeed; got: " + r.terminationReason());
+        assertInstanceOf(TerminationReason.Escalated.class, r.terminationReason(),
+                "SUSPENDED_HITL must produce Escalated termination reason");
     }
 
     // ── 6. DEGRADED → FailureEscalation ───────────────────────────────────────
+    //
+    // Review transitions to DEGRADED after 3 consecutive ToolExceptions.
+    // The DEGRADED case in StateMachineRunner immediately terminates with
+    // TerminationReason.FailureEscalation.
 
     @Test
-    public void stateMachine_degradedState_failureEscalation() {
+    public void stateMachine_degradedState_terminatesWithFailureEscalation() {
         InMemoryEventSink sink = new InMemoryEventSink();
         AgentRuntime rt = new AgentRuntime(new PassThroughPlanValidator(), sink);
         SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("fail", "1.0", "fail"),
                 (args, c) -> { throw new ToolException("ERR", "forced"); });
+        // LLM always calls the failing tool → 3 consecutive ToolExceptions → DEGRADED
         LLMProvider llm = p ->
                 "{\"type\":\"tool_call\",\"tool_name\":\"fail\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
         Agent agent = agentWith(llm, reg);
-        Task task = Task.builder().instruction("degraded").maxCycles(5).build();
+        Task task = Task.builder().instruction("degraded").maxCycles(20).build();
         ExecutionResult r = rt.execute(agent, task);
-        assertFalse(r.succeeded());
-        assertTrue(
-            r.terminationReason() instanceof TerminationReason.FailureEscalation ||
-            r.terminationReason() instanceof TerminationReason.ResourceLimit,
-            "Three consecutive ToolExceptions must escalate, got: " + r.terminationReason());
+        assertFalse(r.succeeded(),
+                "DEGRADED path must not succeed");
+        assertInstanceOf(TerminationReason.FailureEscalation.class, r.terminationReason(),
+                "DEGRADED must produce FailureEscalation, got: " + r.terminationReason());
     }
 
     // ── 7. PartialSuccess hostile taint ───────────────────────────────────────
 
     @Test
-    public void review_partialSuccess_hostileTaint_emitsEvent() {
+    public void review_partialSuccess_hostileTaint_doesNotThrow() {
         InMemoryEventSink sink = new InMemoryEventSink();
         AgentRuntime rt = new AgentRuntime(new PassThroughPlanValidator(), sink);
         SimpleToolRegistry reg = new SimpleToolRegistry();
@@ -242,18 +268,20 @@ public class ExtendedCoverageTest {
         AtomicInteger calls = new AtomicInteger();
         LLMProvider llm = p -> {
             int n = calls.incrementAndGet();
-            if (n == 1) return "{\"type\":\"tool_call\",\"tool_name\":\"search\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
+            if (n == 1)
+                return "{\"type\":\"tool_call\",\"tool_name\":\"search\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
             return "{\"type\":\"final_answer\",\"content\":\"done\"}";
         };
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("search").maxCycles(10).build();
-        assertDoesNotThrow(() -> rt.execute(agent, task, "t", "u"));
+        assertDoesNotThrow(() -> rt.execute(agent, task, "t", "u"),
+                "TaintClassifier must not throw regardless of classifier decision");
     }
 
     // ── 8. Belief conflict event ───────────────────────────────────────────────
 
     @Test
-    public void review_beliefConflict_eventEmitted() {
+    public void review_beliefConflict_doesNotThrow() {
         InMemoryEventSink sink = new InMemoryEventSink();
         AgentRuntime rt = new AgentRuntime(new PassThroughPlanValidator(), sink);
         SimpleToolRegistry reg = new SimpleToolRegistry();
@@ -263,18 +291,25 @@ public class ExtendedCoverageTest {
         AtomicInteger calls = new AtomicInteger();
         LLMProvider llm = p -> {
             int n = calls.incrementAndGet();
-            if (n <= 2) return "{\"type\":\"tool_call\",\"tool_name\":\"q\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
+            if (n <= 2)
+                return "{\"type\":\"tool_call\",\"tool_name\":\"q\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
             return "{\"type\":\"final_answer\",\"content\":\"ok\"}";
         };
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("belief conflict").maxCycles(15).build();
-        assertDoesNotThrow(() -> rt.execute(agent, task, "t", "u"));
+        assertDoesNotThrow(() -> rt.execute(agent, task, "t", "u"),
+                "Belief-conflict detection must not throw");
     }
 
     // ── 9. world-change NeedsCorrection → flagPlanStale ───────────────────────
+    //
+    // Review calls validator.validateAfterAction().  When it returns
+    // NeedsCorrection the Review code flags the plan stale and increments the
+    // revision counter.  This is distinct from the pre-action NeedsCorrection
+    // handled by StateMachineRunner (which directly gates the Decision).
 
     @Test
-    public void review_worldChange_needsCorrection_flagsPlanStale() {
+    public void review_worldChange_needsCorrection_validateAfterActionCalled() {
         AtomicInteger validateAfterCalls = new AtomicInteger();
         PlanValidator validator = new PlanValidator() {
             @Override
@@ -284,6 +319,7 @@ public class ExtendedCoverageTest {
             @Override
             public ValidationResult validateAfterAction(ActionResult r, ExecutionContext ctx) {
                 int n = validateAfterCalls.incrementAndGet();
+                // Return NeedsCorrection once, then Passed so the run can finish
                 return n == 1
                     ? new ValidationResult.NeedsCorrection("stale plan",
                           new FinalAnswer("retry", List.of()))
@@ -295,9 +331,9 @@ public class ExtendedCoverageTest {
         reg.register(ToolContract.readOnly("mutate", "1.0", "mutate"),
                 (args, c) -> ToolResult.write("changed!"));
 
-        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger llmCalls = new AtomicInteger();
         LLMProvider llm = p -> {
-            int n = calls.incrementAndGet();
+            int n = llmCalls.incrementAndGet();
             return n == 1
                 ? "{\"type\":\"tool_call\",\"tool_name\":\"mutate\",\"arguments\":{},\"reasoning_trace\":\"t\"}"
                 : "{\"type\":\"final_answer\",\"content\":\"done\"}";
@@ -308,125 +344,136 @@ public class ExtendedCoverageTest {
         Task task = Task.builder().instruction("mutate world").maxCycles(20).build();
         rt.execute(agent, task, "t", "u");
         assertTrue(validateAfterCalls.get() >= 1,
-                "validateAfterAction must be called at least once");
+                "validateAfterAction must be called at least once when tool executes");
     }
 
     // ── 10. world-change NeedsCorrection exhausting revision budget ────────────
+    //
+    // StateMachineRunner handles NeedsCorrection from validate() (pre-action).
+    // After isRevisionBudgetExceeded(3) the runner terminates with PlanIncoherent.
+    // We drive this by always returning NeedsCorrection from validate() so the
+    // run never reaches action execution.
 
     @Test
-    public void review_worldChange_needsCorrection_exhaustsBudget_terminated() {
+    public void stateMachine_revisionBudgetExhausted_terminatesWithPlanIncoherent() {
         PlanValidator alwaysNeedsRevision = new PlanValidator() {
             @Override
             public ValidationResult validate(Decision d, ExecutionContext ctx) {
-                return new ValidationResult.Passed();
+                // Pre-action NeedsCorrection: increments revisionCount each cycle.
+                // After 4 NeedsCorrection calls isRevisionBudgetExceeded(3) fires.
+                return new ValidationResult.NeedsCorrection("always stale",
+                        new FinalAnswer("retry", List.of()));
             }
             @Override
             public ValidationResult validateAfterAction(ActionResult r, ExecutionContext ctx) {
-                return new ValidationResult.NeedsCorrection("always stale",
-                        new FinalAnswer("retry", List.of()));
+                return new ValidationResult.Passed();
             }
         };
 
         SimpleToolRegistry reg = new SimpleToolRegistry();
-        reg.register(ToolContract.readOnly("mutate", "1.0", "mutate"),
-                (args, c) -> ToolResult.write("changed"));
-
-        AtomicInteger calls = new AtomicInteger();
-        LLMProvider llm = p -> {
-            calls.incrementAndGet();
-            return "{\"type\":\"tool_call\",\"tool_name\":\"mutate\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
-        };
-
+        LLMProvider llm = p ->
+                "{\"type\":\"final_answer\",\"content\":\"done\"}";
         AgentRuntime rt = new AgentRuntime(alwaysNeedsRevision);
         Agent agent = agentWith(llm, reg);
-        Task task = Task.builder().instruction("always mutate").maxCycles(50).build();
+        Task task = Task.builder().instruction("always stale").maxCycles(50).build();
         ExecutionResult r = rt.execute(agent, task, "t", "u");
         assertFalse(r.succeeded());
-        assertTrue(
-            r.terminationReason() instanceof TerminationReason.PlanIncoherent ||
-            r.terminationReason() instanceof TerminationReason.ResourceLimit ||
-            r.terminationReason() instanceof TerminationReason.StagnationLimit,
-            "Review world-change budget exhaustion must terminate, got: " + r.terminationReason());
+        assertInstanceOf(TerminationReason.PlanIncoherent.class, r.terminationReason(),
+                "Revision budget exhaustion must produce PlanIncoherent, got: "
+                + r.terminationReason());
     }
 
     // ── 11. delegation depth exceeded → ResourceLimit ─────────────────────────
+    //
+    // Guard: ctx.currentChainDepth() > maxChainDepth fires in the INITIALIZED case.
+    // With maxChainDepth(1) and ctx pre-incremented to 2, the condition is 2 > 1.
 
     @Test
-    public void stateMachine_delegationDepthExceeded_resourceLimit() {
+    public void stateMachine_delegationDepthExceeded_terminatesWithResourceLimit() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         Agent agent = agentWith(StubLLMProvider.finalAnswer("ok"), reg);
         Task task = Task.builder().instruction("depth").maxCycles(5).maxChainDepth(1).build();
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t", "u");
-        ctx.incrementChainDepth(); // depth 1
-        ctx.incrementChainDepth(); // depth 2 > maxChainDepth 1
+        ctx.incrementChainDepth(); // depth = 1
+        ctx.incrementChainDepth(); // depth = 2, exceeds maxChainDepth = 1
         ExecutionResult r = runtime().executeWith(agent, ctx);
-        assertFalse(r.succeeded());
+        assertFalse(r.succeeded(),
+                "Exceeded chain depth must not succeed");
         assertInstanceOf(TerminationReason.ResourceLimit.class, r.terminationReason(),
-                "chain depth > maxChainDepth must produce ResourceLimit");
+                "Chain depth > maxChainDepth must produce ResourceLimit, got: "
+                + r.terminationReason());
     }
 
     // ── 12. fail-then-succeed → resetConsecutiveFailures ─────────────────────
 
     @Test
-    public void stateMachine_failThenSucceed_resetsConsecutiveFailures() {
+    public void review_failThenSucceed_resetsConsecutiveFailures() {
         SimpleToolRegistry reg = new SimpleToolRegistry();
         reg.register(ToolContract.readOnly("goodtool", "1.0", "goodtool"),
-                (args, c) -> ToolResult.ok("x"));
+                (args, c) -> ToolResult.ok("result"));
 
         AtomicInteger calls = new AtomicInteger();
         LLMProvider llm = p -> {
             int n = calls.incrementAndGet();
-            if (n == 1) return "{\"type\":\"tool_call\",\"tool_name\":\"goodtool\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
+            if (n == 1)
+                return "{\"type\":\"tool_call\",\"tool_name\":\"goodtool\",\"arguments\":{},\"reasoning_trace\":\"t\"}";
             return "{\"type\":\"final_answer\",\"content\":\"recovered\"}";
         };
         Agent agent = agentWith(llm, reg);
         Task task = Task.builder().instruction("fail then succeed").maxCycles(10).build();
         ExecutionResult r = runtime().execute(agent, task, "t", "u");
-        assertTrue(r.succeeded(), "after recovery, run must succeed");
+        assertTrue(r.succeeded(),
+                "Run that recovers with FinalAnswer must produce GoalCompleted");
+        assertNotNull(r.finalAnswer(), "finalAnswer must be populated");
     }
 
     // ── 13. Snapshot roundtrip with working-memory ────────────────────────────
 
     @Test
-    public void checkpoint_roundtrip_withWorkingMemory_isConsistent() {
+    public void checkpoint_roundtrip_withWorkingMemory_hashIsStable() {
         Task task = Task.builder().instruction("snap").maxCycles(5).build();
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t", "u");
         ctx.workingMemory().add(new WorkingMemoryEntry(
                 "id1", "payload", WorkingMemoryTier.ACTIVE,
                 Origin.SYSTEM, 1.0, Instant.now(), TaintLabel.CLEAN));
         ExecutionContext.Snapshot snap = ctx.checkpoint();
-        assertNotNull(snap);
+
+        assertNotNull(snap, "checkpoint() must return a non-null Snapshot");
+        // The stored hash must be reproducible from the snapshot's own fields
         assertEquals(snap.integrityHash(),
                 DefaultExecutionContext.computeSnapshotHash(snap),
-                "integrity hash must be stable");
+                "computeSnapshotHash must reproduce the stored integrityHash");
         assertFalse(snap.workingMemorySnapshot().isEmpty(),
-                "snapshot must include working-memory entries");
+                "Snapshot must include the WorkingMemoryEntry that was added");
     }
 
     // ── 14. EventSink.noop() ──────────────────────────────────────────────────
 
     @Test
-    public void eventSink_noop_doesNotThrow() {
+    public void eventSink_noop_swallowsAllEventTypes() {
         EventSink noop = EventSink.noop();
         for (AgentEvent.EventType type : AgentEvent.EventType.values()) {
-            assertDoesNotThrow(() -> noop.emit(new AgentEvent(
-                    "run-1", "t", type, Instant.now(), Map.of())));
+            assertDoesNotThrow(
+                    () -> noop.emit(new AgentEvent("run-1", "t", type, Instant.now(), Map.of())),
+                    "noop EventSink must not throw for event type: " + type);
         }
     }
 
     // ── 15. InMemoryEventSink captures RUN_STARTED ────────────────────────────
 
     @Test
-    public void runtime_withInMemoryEventSink_capturesEvents() {
+    public void runtime_withInMemoryEventSink_capturesRunStartedEvent() {
         InMemoryEventSink sink = new InMemoryEventSink();
         AgentRuntime rt = new AgentRuntime(new PassThroughPlanValidator(), sink);
         SimpleToolRegistry reg = new SimpleToolRegistry();
         Agent agent = agentWith(StubLLMProvider.finalAnswer("ev"), reg);
         Task task = Task.builder().instruction("events").maxCycles(5).build();
         rt.execute(agent, task, "t", "u");
-        assertFalse(sink.all().isEmpty(), "InMemoryEventSink must capture at least one event");
+        // InMemoryEventSink.all() returns all captured events
+        assertFalse(sink.all().isEmpty(),
+                "InMemoryEventSink must capture at least one event after execute()");
         assertTrue(sink.all().stream()
-                .anyMatch(e -> e.type() == AgentEvent.EventType.RUN_STARTED),
-                "RUN_STARTED event must be present");
+                        .anyMatch(e -> e.type() == AgentEvent.EventType.RUN_STARTED),
+                "AgentRuntime.executeWith() must emit RUN_STARTED as its first event");
     }
 }

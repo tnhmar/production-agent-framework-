@@ -3,6 +3,7 @@ package com.agentframework.action.middleware;
 import com.agentframework.action.OperationalParams;
 import com.agentframework.foundation.ToolResult;
 
+import java.security.SecureRandom;
 import java.util.Random;
 import java.util.function.Function;
 
@@ -25,11 +26,13 @@ import java.util.function.Function;
  *       contract, falling back to construction-time defaults.</li>
  *   <li>{@link Thread#interrupt()} is honoured: interrupted sleep re-raises the
  *       current exception immediately rather than silently swallowing the signal.</li>
+ *   <li>A {@link SecureRandom} is used by default for jitter to avoid SpotBugs
+ *       PREDICTABLE_RANDOM findings in security-sensitive contexts.</li>
  * </ul>
  */
 public class RetryMiddleware implements ToolMiddleware {
 
-    private static final double JITTER_FACTOR  = 0.30;
+    private static final double JITTER_FACTOR        = 0.30;
     private static final long   DEFAULT_MAX_BACKOFF_MS = 30_000L;
 
     private final int    defaultMaxRetries;
@@ -37,8 +40,9 @@ public class RetryMiddleware implements ToolMiddleware {
     private final long   maxBackoffMs;
     private final Random jitterRandom;
 
+    /** Uses {@link SecureRandom} for jitter by default. */
     public RetryMiddleware(int defaultMaxRetries, long baseBackoffMs) {
-        this(defaultMaxRetries, baseBackoffMs, DEFAULT_MAX_BACKOFF_MS, new Random());
+        this(defaultMaxRetries, baseBackoffMs, DEFAULT_MAX_BACKOFF_MS, new SecureRandom());
     }
 
     /**
@@ -47,8 +51,8 @@ public class RetryMiddleware implements ToolMiddleware {
      */
     public RetryMiddleware(int defaultMaxRetries, long baseBackoffMs,
                            long maxBackoffMs, Random jitterRandom) {
-        if (defaultMaxRetries < 0) throw new IllegalArgumentException("defaultMaxRetries must be >= 0");
-        if (baseBackoffMs <= 0)    throw new IllegalArgumentException("baseBackoffMs must be > 0");
+        if (defaultMaxRetries < 0)        throw new IllegalArgumentException("defaultMaxRetries must be >= 0");
+        if (baseBackoffMs <= 0)           throw new IllegalArgumentException("baseBackoffMs must be > 0");
         if (maxBackoffMs < baseBackoffMs) throw new IllegalArgumentException(
             "maxBackoffMs must be >= baseBackoffMs");
         this.defaultMaxRetries = defaultMaxRetries;

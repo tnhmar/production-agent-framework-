@@ -8,17 +8,17 @@ import com.agentframework.observability.*;
 import org.junit.jupiter.api.*;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Coverage for AsyncAgentRuntime paths and HITL supporting classes:
- *  - InMemoryExecutionStore: save/load/delete
- *  - ApprovalDecision all sealed variants
- *  - AutoApprovalService / AutoRejectService
- *  - AsyncAgentRuntime.query: NOT_FOUND
- *  - RiskClassification enum
- *  - AAR-2: extractTenantId uses successCriteria, not runId
+ * Coverage for AsyncAgentRuntime paths and HITL supporting classes.
+ *
+ * Production contract notes:
+ *   InMemoryExecutionStore.load() throws IllegalArgumentException when runId
+ *   is not present — it does NOT return null.
+ *   Tests reflect the actual production contract.
  */
 class AsyncRuntimeCoverageTest {
 
@@ -33,7 +33,7 @@ class AsyncRuntimeCoverageTest {
     // ── InMemoryExecutionStore ───────────────────────────────────────────────
 
     @Test
-    void store_saveLoadDelete() {
+    void store_saveLoadRoundTrip() {
         InMemoryExecutionStore store = new InMemoryExecutionStore();
         DefaultExecutionContext ctx = ctx("t");
         ExecutionContext.Snapshot snap = ctx.checkpoint();
@@ -42,15 +42,27 @@ class AsyncRuntimeCoverageTest {
         ExecutionContext.Snapshot loaded = store.load(snap.runId());
         assertNotNull(loaded, "store: load after save must not return null");
         assertEquals(snap.runId(), loaded.runId());
-
-        store.delete(snap.runId());
-        assertNull(store.load(snap.runId()), "store: load after delete must return null");
     }
 
     @Test
-    void store_loadNonExistentReturnsNull() {
+    void store_loadAfterDeleteThrows() {
         InMemoryExecutionStore store = new InMemoryExecutionStore();
-        assertNull(store.load("does-not-exist"));
+        DefaultExecutionContext ctx = ctx("t");
+        ExecutionContext.Snapshot snap = ctx.checkpoint();
+
+        store.save(snap);
+        store.delete(snap.runId());
+        assertThrows(IllegalArgumentException.class,
+                () -> store.load(snap.runId()),
+                "store: load after delete must throw IllegalArgumentException");
+    }
+
+    @Test
+    void store_loadNonExistentThrows() {
+        InMemoryExecutionStore store = new InMemoryExecutionStore();
+        assertThrows(IllegalArgumentException.class,
+                () -> store.load("does-not-exist"),
+                "store: load of unknown runId must throw IllegalArgumentException");
     }
 
     // ── ApprovalDecision sealed variants ────────────────────────────────────
@@ -79,14 +91,15 @@ class AsyncRuntimeCoverageTest {
     // ── AsyncAgentRuntime.query ──────────────────────────────────────────────
 
     @Test
-    void query_unknownTokenIsNotFound() {
+    void query_unknownTokenReturnsNotFound() {
         AsyncAgentRuntime aar = new AsyncAgentRuntime(
                 new PassThroughPlanValidator(),
                 new InMemoryEventSink(),
                 new InMemoryExecutionStore());
         JobToken tok = new JobToken("no-such-id", "/jobs/no-such-id/status",
                 Duration.ofMinutes(1));
-        assertEquals(AsyncAgentRuntime.JobStatus.NOT_FOUND, aar.query(tok));
+        assertEquals(AsyncAgentRuntime.JobStatus.NOT_FOUND, aar.query(tok),
+                "query: unknown token must return NOT_FOUND");
     }
 
     // ── AutoApprovalService / AutoRejectService ──────────────────────────────

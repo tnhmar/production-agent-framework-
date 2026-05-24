@@ -1,6 +1,7 @@
 package com.agentframework.tests;
 
 import com.agentframework.action.*;
+import com.agentframework.action.middleware.ToolMiddleware;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
 import com.agentframework.hitl.*;
@@ -25,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * DefaultAction.withDefaultValidators signature:
  *   withDefaultValidators(ToolRegistry, ToolMiddleware, ToolDispatcher,
  *                         SecurityEnforcer, EventSink)
- * A no-op ToolMiddleware lambda is used: (inv, next) -> next.apply(inv)
+ * Use ToolMiddleware.identity() for the no-op middleware.
  */
 class DefectRegressionTest {
 
@@ -54,6 +55,16 @@ class DefectRegressionTest {
         return ToolContract.irreversible(name, name, name + "-desc");
     }
 
+    private static DefaultAction buildAction(SimpleToolRegistry registry,
+                                              SecurityEnforcer se) {
+        return DefaultAction.withDefaultValidators(
+                registry,
+                ToolMiddleware.identity(),
+                new DefaultToolDispatcher(registry),
+                se,
+                new InMemoryEventSink());
+    }
+
     // ── DA-1: parallel batch blocked when hostile taint in working memory ───
 
     @Test
@@ -61,22 +72,14 @@ class DefectRegressionTest {
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(entry("h1", "ignored", TaintLabel.HOSTILE));
 
-        TaintTracker tracker = new TaintTracker();
-        TenantPolicyEngine policyEngine = new TenantPolicyEngine();
-        SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
-
+        SecurityEnforcer se = new SecurityEnforcer(
+                new TaintTracker(), new TenantPolicyEngine());
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("echo"),
                 inv -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
-        DefaultAction action = DefaultAction.withDefaultValidators(
-                registry,
-                (inv, next) -> next.apply(inv),
-                new DefaultToolDispatcher(registry),
-                se,
-                new InMemoryEventSink());
-
+        DefaultAction action = buildAction(registry, se);
         ParallelToolCalls parallel = new ParallelToolCalls(
                 List.of(tc("echo")), false, Duration.ofSeconds(5));
 
@@ -90,22 +93,14 @@ class DefectRegressionTest {
     void da1_parallelBatchSucceedsWhenNoTaint() throws Exception {
         DefaultExecutionContext c = ctx("t1");
 
-        TaintTracker tracker = new TaintTracker();
-        TenantPolicyEngine policyEngine = new TenantPolicyEngine();
-        SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
-
+        SecurityEnforcer se = new SecurityEnforcer(
+                new TaintTracker(), new TenantPolicyEngine());
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("echo"),
                 inv -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
-        DefaultAction action = DefaultAction.withDefaultValidators(
-                registry,
-                (inv, next) -> next.apply(inv),
-                new DefaultToolDispatcher(registry),
-                se,
-                new InMemoryEventSink());
-
+        DefaultAction action = buildAction(registry, se);
         ParallelToolCalls parallel = new ParallelToolCalls(
                 List.of(tc("echo")), false, Duration.ofSeconds(5));
 
@@ -272,15 +267,9 @@ class DefectRegressionTest {
     @Test
     void da2_closeShutdownsExecutor() throws Exception {
         SimpleToolRegistry registry = new SimpleToolRegistry();
-        TaintTracker tracker = new TaintTracker();
-        TenantPolicyEngine policyEngine = new TenantPolicyEngine();
-        SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
-        DefaultAction action = DefaultAction.withDefaultValidators(
-                registry,
-                (inv, next) -> next.apply(inv),
-                new DefaultToolDispatcher(registry),
-                se,
-                new InMemoryEventSink());
+        SecurityEnforcer se = new SecurityEnforcer(
+                new TaintTracker(), new TenantPolicyEngine());
+        DefaultAction action = buildAction(registry, se);
         assertDoesNotThrow(action::close, "DA-2: close() must not throw");
     }
 
@@ -289,9 +278,8 @@ class DefectRegressionTest {
     @Test
     void da3_parallelDeadlineIsGlobal() throws Exception {
         DefaultExecutionContext c = ctx("t1");
-        TaintTracker tracker = new TaintTracker();
-        TenantPolicyEngine policyEngine = new TenantPolicyEngine();
-        SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
+        SecurityEnforcer se = new SecurityEnforcer(
+                new TaintTracker(), new TenantPolicyEngine());
 
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("slow"), inv -> {
@@ -300,13 +288,7 @@ class DefectRegressionTest {
                     BigDecimal.ZERO, Duration.ofMillis(50), 0);
         });
 
-        DefaultAction action = DefaultAction.withDefaultValidators(
-                registry,
-                (inv, next) -> next.apply(inv),
-                new DefaultToolDispatcher(registry),
-                se,
-                new InMemoryEventSink());
-
+        DefaultAction action = buildAction(registry, se);
         ParallelToolCalls parallel = new ParallelToolCalls(
                 List.of(tc("slow"), tc("slow"), tc("slow")),
                 false, Duration.ofMillis(200));

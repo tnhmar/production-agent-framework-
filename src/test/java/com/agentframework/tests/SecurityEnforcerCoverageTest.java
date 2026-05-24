@@ -15,12 +15,13 @@ import static org.junit.jupiter.api.Assertions.*;
  * Deep coverage of SecurityEnforcer.
  *
  * Production API notes:
- *   TenantPolicy.restricted(tenantId, Set.of())  — disallows irreversible
- *   TenantPolicy.permissive(tenantId)             — allows all
- *   TaintTracker.label(id, TaintLabel)            — add taint
- *   TaintTracker.isHostile(id)                    — check hostile
- *   TaintTracker.clear(id)                        — remove by id
- *   TrustBoundary is a class, not an enum → use TrustTier.values()
+ *   TenantPolicy.restricted(tenantId, Set)  — disallows irreversible
+ *   TenantPolicy.permissive(tenantId)       — allows all
+ *   TenantPolicyEngine.register(TenantPolicy) — NOT put()
+ *   TaintTracker.label(id, TaintLabel)      — add taint
+ *   TaintTracker.isHostile(id)              — check hostile
+ *   TaintTracker.clear(id)                  — remove by id
+ *   TrustBoundary is a class (not enum)     — use TrustTier.values()
  */
 class SecurityEnforcerCoverageTest {
 
@@ -72,7 +73,7 @@ class SecurityEnforcerCoverageTest {
     @Test
     void enforce_blocksIrreversibleWhenTenantDisallows() {
         TenantPolicyEngine engine = new TenantPolicyEngine();
-        engine.put("strict", TenantPolicy.restricted("strict", Set.of()));
+        engine.register(TenantPolicy.restricted("strict", Set.of()));
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
         DefaultExecutionContext c = ctx("strict");
         assertFalse(se.validate(tc("delete-all"), irreversible("delete-all"), c).isPassed(),
@@ -114,7 +115,7 @@ class SecurityEnforcerCoverageTest {
     @Test
     void validateParallel_blocksIrreversibleInBatchForStrictTenant() {
         TenantPolicyEngine engine = new TenantPolicyEngine();
-        engine.put("strict", TenantPolicy.restricted("strict", Set.of()));
+        engine.register(TenantPolicy.restricted("strict", Set.of()));
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
         DefaultExecutionContext c = ctx("strict");
         ValidationVerdict v = se.validateParallel(
@@ -222,7 +223,6 @@ class SecurityEnforcerCoverageTest {
     // ── TrustBoundary ────────────────────────────────────────────────────────
     //
     // TrustBoundary is a class (not an enum). Test its permits() behaviour.
-    // Use TrustTier.values() to iterate tiers.
 
     @Test
     void trustBoundary_highMinimumOnlyPermitsHigh() {

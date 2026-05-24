@@ -29,16 +29,57 @@ public class PlanValidatorTest {
                 Budget.unlimited(), "", excluded, required);
     }
 
+    /** A PlanValidator that always passes both methods. */
+    private static PlanValidator alwaysPass() {
+        return new PlanValidator() {
+            public ValidationResult validate(Decision d, ExecutionContext c) {
+                return new ValidationResult.Passed();
+            }
+            public ValidationResult validateAfterAction(ActionResult r, ExecutionContext c) {
+                return new ValidationResult.Passed();
+            }
+        };
+    }
+
+    /** A PlanValidator whose validate() always fails with the given reason. */
+    private static PlanValidator alwaysFail(String reason) {
+        return new PlanValidator() {
+            public ValidationResult validate(Decision d, ExecutionContext c) {
+                return new ValidationResult.Failed(reason, List.of());
+            }
+            public ValidationResult validateAfterAction(ActionResult r, ExecutionContext c) {
+                return new ValidationResult.Passed();
+            }
+        };
+    }
+
+    /** A PlanValidator whose validateAfterAction() always returns NeedsCorrection. */
+    private static PlanValidator afterActionFail(String reason) {
+        return new PlanValidator() {
+            public ValidationResult validate(Decision d, ExecutionContext c) {
+                return new ValidationResult.Passed();
+            }
+            public ValidationResult validateAfterAction(ActionResult r, ExecutionContext c) {
+                return new ValidationResult.NeedsCorrection(reason, null);
+            }
+        };
+    }
+
     private DefaultExecutionContext ctxWithGoal(Goal g) {
-        Task t = Task.builder().instruction("test").build();
-        DefaultExecutionContext ctx = new DefaultExecutionContext(t, "t1", "u1");
+        DefaultExecutionContext ctx = new DefaultExecutionContext(
+                Task.builder().instruction("test").build(), "t1", "u1");
         ctx.goalStack().push(g);
         return ctx;
     }
 
     private DefaultExecutionContext emptyCtx() {
-        Task t = Task.builder().instruction("test").build();
-        return new DefaultExecutionContext(t, "t1", "u1");
+        return new DefaultExecutionContext(
+                Task.builder().instruction("test").build(), "t1", "u1");
+    }
+
+    /** FinalAnswer with no citations. */
+    private static FinalAnswer fa(String content) {
+        return new FinalAnswer(content, List.of());
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -48,24 +89,23 @@ public class PlanValidatorTest {
     @Test
     public void belief_assertNew_stored() {
         DefaultBeliefState bs = new DefaultBeliefState();
-        Belief b = belief("b1", "agent", "knows", "java", 0.9);
-        bs.assertBelief(b);
+        bs.assertBelief(belief("b1", "agent", "knows", "java", 0.9));
         assertTrue(bs.getBySPO("agent", "knows").isPresent());
         assertEquals("java", bs.getBySPO("agent", "knows").get().object());
     }
 
     @Test
     public void belief_assertNull_throws() {
-        DefaultBeliefState bs = new DefaultBeliefState();
-        assertThrows(NullPointerException.class, () -> bs.assertBelief(null));
+        assertThrows(NullPointerException.class,
+                () -> new DefaultBeliefState().assertBelief(null));
     }
 
     @Test
     public void belief_higherConfidenceWins_noConflict() {
         DefaultBeliefState bs = new DefaultBeliefState();
         bs.assertBelief(belief("b1", "agent", "status", "idle", 0.5));
-        bs.assertBelief(belief("b2", "agent", "status", "idle", 0.9));
-        assertEquals(0, bs.conflicts().size(), "same object -> no conflict logged");
+        bs.assertBelief(belief("b2", "agent", "status", "idle", 0.9)); // same object -> no conflict
+        assertEquals(0, bs.conflicts().size());
         assertEquals(0.9, bs.getBySPO("agent", "status").get().confidence(), 1e-9);
     }
 
@@ -73,8 +113,8 @@ public class PlanValidatorTest {
     public void belief_conflictingObjectsLogged() {
         DefaultBeliefState bs = new DefaultBeliefState();
         bs.assertBelief(belief("b1", "agent", "status", "idle", 0.5));
-        bs.assertBelief(belief("b2", "agent", "status", "busy", 0.9));
-        assertEquals(1, bs.conflicts().size(), "one conflict logged");
+        bs.assertBelief(belief("b2", "agent", "status", "busy", 0.9)); // different object -> conflict
+        assertEquals(1, bs.conflicts().size());
         assertTrue(bs.getBySPO("agent", "status").get().conflicted());
     }
 
@@ -104,7 +144,7 @@ public class PlanValidatorTest {
         bs.assertBelief(belief("b1", "a", "p", "old", 0.5));
         Belief winner = bs.assertBelief(belief("b2", "a", "p", "new", 0.9));
         bs.resolveConflict("a", "p", winner.beliefId());
-        assertFalse(bs.getBySPO("a", "p").get().conflicted(), "conflict cleared after resolution");
+        assertFalse(bs.getBySPO("a", "p").get().conflicted());
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -114,8 +154,7 @@ public class PlanValidatorTest {
     @Test
     public void goalStack_pushAndCurrent() {
         DefaultGoalStack gs = new DefaultGoalStack();
-        Goal g = rootGoal(GoalStatus.ACTIVE);
-        gs.push(g);
+        gs.push(rootGoal(GoalStatus.ACTIVE));
         assertTrue(gs.current().isPresent());
         assertEquals("root", gs.current().get().id());
         assertEquals(1, gs.depth());
@@ -159,9 +198,8 @@ public class PlanValidatorTest {
     public void goalStack_allActiveFiltersCorrectly() {
         DefaultGoalStack gs = new DefaultGoalStack();
         gs.push(rootGoal(GoalStatus.ACTIVE));
-        Goal sub = new Goal("sub", "root", GoalStatus.COMPLETED,
-                "sub-goal", List.of(), Budget.unlimited());
-        gs.push(sub);
+        gs.push(new Goal("sub", "root", GoalStatus.COMPLETED,
+                "sub-goal", List.of(), Budget.unlimited()));
         List<Goal> active = gs.allActive();
         assertEquals(1, active.size());
         assertEquals("root", active.get(0).id());
@@ -189,7 +227,7 @@ public class PlanValidatorTest {
         Goal updated = g.withStatus(GoalStatus.ACTIVE);
         assertNotSame(g, updated);
         assertEquals(GoalStatus.ACTIVE, updated.status());
-        assertEquals(GoalStatus.PENDING, g.status(), "original unchanged");
+        assertEquals(GoalStatus.PENDING, g.status());
     }
 
     @Test
@@ -197,7 +235,7 @@ public class PlanValidatorTest {
         Goal g = rootGoal(GoalStatus.ACTIVE);
         Goal g2 = g.withExcludedTools(Set.of("badTool"));
         assertTrue(g2.excludedTools().contains("badTool"));
-        assertTrue(g.excludedTools().isEmpty(), "original unaffected");
+        assertTrue(g.excludedTools().isEmpty());
     }
 
     @Test
@@ -205,7 +243,7 @@ public class PlanValidatorTest {
         Goal g = rootGoal(GoalStatus.ACTIVE);
         Goal g2 = g.withRequiredTools(Set.of("searchTool"));
         assertTrue(g2.requiredTools().contains("searchTool"));
-        assertTrue(g.requiredTools().isEmpty(), "original unaffected");
+        assertTrue(g.requiredTools().isEmpty());
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -216,41 +254,38 @@ public class PlanValidatorTest {
 
     @Test
     public void coherence_escalate_alwaysPasses() {
-        Escalate e = new Escalate("help");
+        // Escalate(reason, severity) - 2 args
         assertInstanceOf(ValidationResult.Passed.class,
-                validator.validate(e, emptyCtx()));
+                validator.validate(new Escalate("help", "HIGH"), emptyCtx()));
     }
 
     @Test
     public void coherence_askClarification_alwaysPasses() {
-        AskClarification a = new AskClarification("which format?");
         assertInstanceOf(ValidationResult.Passed.class,
-                validator.validate(a, emptyCtx()));
+                validator.validate(new AskClarification("which format?"), emptyCtx()));
     }
 
     @Test
     public void coherence_emptyGoalStack_fails() {
-        FinalAnswer fa = new FinalAnswer("answer", "trace");
-        ValidationResult r = validator.validate(fa, emptyCtx());
+        ValidationResult r = validator.validate(fa("answer"), emptyCtx());
         assertInstanceOf(ValidationResult.Failed.class, r);
         assertTrue(((ValidationResult.Failed) r).reason().contains("No root goal"));
     }
 
     @Test
     public void coherence_noRootIdInStack_fails() {
-        Task t = Task.builder().instruction("x").build();
-        DefaultExecutionContext ctx = new DefaultExecutionContext(t, "t1", "u1");
+        DefaultExecutionContext ctx = new DefaultExecutionContext(
+                Task.builder().instruction("x").build(), "t1", "u1");
         ctx.goalStack().push(new Goal("sub1", null, GoalStatus.ACTIVE,
                 "sub", List.of(), Budget.unlimited()));
-        ValidationResult r = validator.validate(new FinalAnswer("x", "t"), ctx);
+        ValidationResult r = validator.validate(fa("x"), ctx);
         assertInstanceOf(ValidationResult.Failed.class, r);
         assertTrue(((ValidationResult.Failed) r).reason().contains("'root'"));
     }
 
     @Test
     public void coherence_finalAnswer_on_completedRoot_fails() {
-        ValidationResult r = validator.validate(
-                new FinalAnswer("dup", "t"),
+        ValidationResult r = validator.validate(fa("dup"),
                 ctxWithGoal(rootGoal(GoalStatus.COMPLETED)));
         assertInstanceOf(ValidationResult.Failed.class, r);
         assertTrue(((ValidationResult.Failed) r).reason().contains("COMPLETED"));
@@ -258,8 +293,7 @@ public class PlanValidatorTest {
 
     @Test
     public void coherence_finalAnswer_on_failedRoot_fails() {
-        ValidationResult r = validator.validate(
-                new FinalAnswer("too late", "t"),
+        ValidationResult r = validator.validate(fa("too late"),
                 ctxWithGoal(rootGoal(GoalStatus.FAILED)));
         assertInstanceOf(ValidationResult.Failed.class, r);
         assertTrue(((ValidationResult.Failed) r).reason().contains("FAILED"));
@@ -267,17 +301,15 @@ public class PlanValidatorTest {
 
     @Test
     public void coherence_finalAnswer_on_activeRoot_passes() {
-        ValidationResult r = validator.validate(
-                new FinalAnswer("ok", "t"),
-                ctxWithGoal(rootGoal(GoalStatus.ACTIVE)));
-        assertInstanceOf(ValidationResult.Passed.class, r);
+        assertInstanceOf(ValidationResult.Passed.class,
+                validator.validate(fa("ok"), ctxWithGoal(rootGoal(GoalStatus.ACTIVE))));
     }
 
     @Test
     public void coherence_toolCall_excluded_needsCorrection() {
         Goal g = rootGoalWithConstraints(GoalStatus.ACTIVE, Set.of("dangerTool"), Set.of());
-        ToolCall tc = new ToolCall("dangerTool", java.util.Map.of(), "trace");
-        ValidationResult r = validator.validate(tc, ctxWithGoal(g));
+        ValidationResult r = validator.validate(
+                new ToolCall("dangerTool", java.util.Map.of(), "trace"), ctxWithGoal(g));
         assertInstanceOf(ValidationResult.NeedsCorrection.class, r);
         assertTrue(((ValidationResult.NeedsCorrection) r).reason().contains("excluded"));
     }
@@ -285,8 +317,8 @@ public class PlanValidatorTest {
     @Test
     public void coherence_toolCall_notInRequiredWhitelist_needsCorrection() {
         Goal g = rootGoalWithConstraints(GoalStatus.ACTIVE, Set.of(), Set.of("allowedTool"));
-        ToolCall tc = new ToolCall("otherTool", java.util.Map.of(), "trace");
-        ValidationResult r = validator.validate(tc, ctxWithGoal(g));
+        ValidationResult r = validator.validate(
+                new ToolCall("otherTool", java.util.Map.of(), "trace"), ctxWithGoal(g));
         assertInstanceOf(ValidationResult.NeedsCorrection.class, r);
         assertTrue(((ValidationResult.NeedsCorrection) r).reason().contains("whitelist"));
     }
@@ -294,31 +326,30 @@ public class PlanValidatorTest {
     @Test
     public void coherence_toolCall_inRequiredWhitelist_passes() {
         Goal g = rootGoalWithConstraints(GoalStatus.ACTIVE, Set.of(), Set.of("allowedTool"));
-        ToolCall tc = new ToolCall("allowedTool", java.util.Map.of(), "trace");
-        assertInstanceOf(ValidationResult.Passed.class, validator.validate(tc, ctxWithGoal(g)));
+        assertInstanceOf(ValidationResult.Passed.class,
+                validator.validate(new ToolCall("allowedTool", java.util.Map.of(), "trace"),
+                        ctxWithGoal(g)));
     }
 
     @Test
     public void coherence_toolCall_noConstraints_passes() {
-        ToolCall tc = new ToolCall("anyTool", java.util.Map.of(), "trace");
         assertInstanceOf(ValidationResult.Passed.class,
-                validator.validate(tc, ctxWithGoal(rootGoal(GoalStatus.ACTIVE))));
+                validator.validate(new ToolCall("anyTool", java.util.Map.of(), "trace"),
+                        ctxWithGoal(rootGoal(GoalStatus.ACTIVE))));
     }
 
     @Test
     public void coherence_validateAfterAction_failedRoot_needsCorrection() {
         DefaultExecutionContext ctx = ctxWithGoal(rootGoal(GoalStatus.ACTIVE));
         ctx.goalStack().updateStatus("root", GoalStatus.FAILED);
-        ActionResult ar = new ActionResult("search", "{}", true, 0);
         assertInstanceOf(ValidationResult.NeedsCorrection.class,
-                validator.validateAfterAction(ar, ctx));
+                validator.validateAfterAction(ActionResult.failure("ERR", "fail"), ctx));
     }
 
     @Test
     public void coherence_validateAfterAction_noRoot_passes() {
-        ActionResult ar = new ActionResult("search", "{}", true, 0);
         assertInstanceOf(ValidationResult.Passed.class,
-                validator.validateAfterAction(ar, emptyCtx()));
+                validator.validateAfterAction(ActionResult.failure("ERR", "x"), emptyCtx()));
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -327,20 +358,17 @@ public class PlanValidatorTest {
 
     @Test
     public void composite_allPass_returnsPass() {
-        PlanValidator v1 = (d, c) -> new ValidationResult.Passed();
-        PlanValidator v2 = (d, c) -> new ValidationResult.Passed();
-        CompositePlanValidator comp = new CompositePlanValidator(List.of(v1, v2));
+        CompositePlanValidator comp = new CompositePlanValidator(
+                List.of(alwaysPass(), alwaysPass()));
         assertInstanceOf(ValidationResult.Passed.class,
-                comp.validate(new FinalAnswer("ok", "t"),
-                        ctxWithGoal(rootGoal(GoalStatus.ACTIVE))));
+                comp.validate(fa("ok"), ctxWithGoal(rootGoal(GoalStatus.ACTIVE))));
     }
 
     @Test
     public void composite_firstFails_shortCircuits() {
-        PlanValidator v1 = (d, c) -> new ValidationResult.Failed("v1 fail", List.of());
-        PlanValidator v2 = (d, c) -> new ValidationResult.Passed();
-        CompositePlanValidator comp = new CompositePlanValidator(List.of(v1, v2));
-        ValidationResult r = comp.validate(new FinalAnswer("x", "t"),
+        CompositePlanValidator comp = new CompositePlanValidator(
+                List.of(alwaysFail("v1 fail"), alwaysPass()));
+        ValidationResult r = comp.validate(fa("x"),
                 ctxWithGoal(rootGoal(GoalStatus.ACTIVE)));
         assertInstanceOf(ValidationResult.Failed.class, r);
         assertEquals("v1 fail", ((ValidationResult.Failed) r).reason());
@@ -360,18 +388,11 @@ public class PlanValidatorTest {
 
     @Test
     public void composite_validateAfterAction_shortCircuits() {
-        PlanValidator afterV = new PlanValidator() {
-            public ValidationResult validate(Decision d, ExecutionContext c) {
-                return new ValidationResult.Passed();
-            }
-            public ValidationResult validateAfterAction(ActionResult r, ExecutionContext c) {
-                return new ValidationResult.NeedsCorrection("after fail", null);
-            }
-        };
-        PlanValidator noop = (d, c) -> new ValidationResult.Passed();
-        CompositePlanValidator comp = new CompositePlanValidator(List.of(afterV, noop));
+        CompositePlanValidator comp = new CompositePlanValidator(
+                List.of(afterActionFail("after fail"), alwaysPass()));
         ValidationResult r = comp.validateAfterAction(
-                new ActionResult("t", "{}", true, 0), emptyCtx());
+                ActionResult.failure("ERR", "x"), emptyCtx());
         assertInstanceOf(ValidationResult.NeedsCorrection.class, r);
+        assertEquals("after fail", ((ValidationResult.NeedsCorrection) r).reason());
     }
 }

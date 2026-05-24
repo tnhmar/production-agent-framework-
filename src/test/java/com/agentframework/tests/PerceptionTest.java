@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 public class PerceptionTest {
 
@@ -18,26 +19,22 @@ public class PerceptionTest {
 
     @Test
     public void typeIdentifier_textString() {
-        DefaultTypeIdentifier id = new DefaultTypeIdentifier();
-        assertEquals(InputType.TEXT, id.identify("hello world"));
+        assertEquals(InputType.TEXT, new DefaultTypeIdentifier().identify("hello world"));
     }
 
     @Test
     public void typeIdentifier_jsonString() {
-        DefaultTypeIdentifier id = new DefaultTypeIdentifier();
-        assertEquals(InputType.JSON, id.identify("{\"key\":\"value\"}"));
+        assertEquals(InputType.JSON, new DefaultTypeIdentifier().identify("{\"key\":\"value\"}"));
     }
 
     @Test
     public void typeIdentifier_jsonWithLeadingSpace() {
-        DefaultTypeIdentifier id = new DefaultTypeIdentifier();
-        assertEquals(InputType.JSON, id.identify("  { \"a\": 1 }"));
+        assertEquals(InputType.JSON, new DefaultTypeIdentifier().identify("  { \"a\": 1 }"));
     }
 
     @Test
     public void typeIdentifier_nonStringObject() {
-        DefaultTypeIdentifier id = new DefaultTypeIdentifier();
-        assertEquals(InputType.UNKNOWN, id.identify(42));
+        assertEquals(InputType.UNKNOWN, new DefaultTypeIdentifier().identify(42));
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -46,15 +43,13 @@ public class PerceptionTest {
 
     @Test
     public void formatParser_nullRaw_producesEmpty() {
-        DefaultFormatParser p = new DefaultFormatParser();
-        ParsedContent c = p.parse(null, InputType.TEXT);
+        ParsedContent c = new DefaultFormatParser().parse(null, InputType.TEXT);
         assertEquals("", c.textContent());
     }
 
     @Test
     public void formatParser_nonNullRaw_usesToString() {
-        DefaultFormatParser p = new DefaultFormatParser();
-        ParsedContent c = p.parse("hello", InputType.TEXT);
+        ParsedContent c = new DefaultFormatParser().parse("hello", InputType.TEXT);
         assertEquals("hello", c.textContent());
     }
 
@@ -64,25 +59,22 @@ public class PerceptionTest {
 
     @Test
     public void normalizer_nullTextBecomesEmpty() {
-        DefaultNormalizer n = new DefaultNormalizer();
-        ParsedContent pc = new ParsedContent(null, Map.of(), java.util.List.of());
-        NormalizedContent nc = n.normalize(pc);
+        NormalizedContent nc = new DefaultNormalizer()
+                .normalize(new ParsedContent(null, Map.of(), java.util.List.of()));
         assertEquals("", nc.text());
     }
 
     @Test
     public void normalizer_collapsesWhitespace() {
-        DefaultNormalizer n = new DefaultNormalizer();
-        ParsedContent pc = new ParsedContent("  hello   world  ", Map.of(), java.util.List.of());
-        NormalizedContent nc = n.normalize(pc);
+        NormalizedContent nc = new DefaultNormalizer()
+                .normalize(new ParsedContent("  hello   world  ", Map.of(), java.util.List.of()));
         assertEquals("hello world", nc.text());
     }
 
     @Test
     public void normalizer_plainText_unchanged() {
-        DefaultNormalizer n = new DefaultNormalizer();
-        ParsedContent pc = new ParsedContent("clean", Map.of(), java.util.List.of());
-        NormalizedContent nc = n.normalize(pc);
+        NormalizedContent nc = new DefaultNormalizer()
+                .normalize(new ParsedContent("clean", Map.of(), java.util.List.of()));
         assertEquals("clean", nc.text());
     }
 
@@ -92,39 +84,34 @@ public class PerceptionTest {
 
     @Test
     public void metadataInjector_userOriginGivesHighTrust() {
-        DefaultMetadataInjector inj = new DefaultMetadataInjector();
-        NormalizedContent nc = new NormalizedContent("text", Map.of());
-        AnnotatedContent ac = inj.injectMetadata(nc, InputOrigin.USER);
+        AnnotatedContent ac = new DefaultMetadataInjector()
+                .injectMetadata(new NormalizedContent("text", Map.of()), InputOrigin.USER);
         assertEquals(TrustTier.HIGH,   ac.trustTier());
         assertEquals(InputOrigin.USER, ac.origin());
     }
 
     @Test
     public void metadataInjector_systemOriginGivesHighTrust() {
-        DefaultMetadataInjector inj = new DefaultMetadataInjector();
-        NormalizedContent nc = new NormalizedContent("text", Map.of());
-        assertEquals(TrustTier.HIGH, inj.injectMetadata(nc, InputOrigin.SYSTEM).trustTier());
+        assertEquals(TrustTier.HIGH, new DefaultMetadataInjector()
+                .injectMetadata(new NormalizedContent("x", Map.of()), InputOrigin.SYSTEM).trustTier());
     }
 
     @Test
     public void metadataInjector_toolOriginGivesMediumTrust() {
-        DefaultMetadataInjector inj = new DefaultMetadataInjector();
-        NormalizedContent nc = new NormalizedContent("text", Map.of());
-        assertEquals(TrustTier.MEDIUM, inj.injectMetadata(nc, InputOrigin.TOOL).trustTier());
+        assertEquals(TrustTier.MEDIUM, new DefaultMetadataInjector()
+                .injectMetadata(new NormalizedContent("x", Map.of()), InputOrigin.TOOL).trustTier());
     }
 
     @Test
     public void metadataInjector_memoryOriginGivesMediumTrust() {
-        DefaultMetadataInjector inj = new DefaultMetadataInjector();
-        NormalizedContent nc = new NormalizedContent("text", Map.of());
-        assertEquals(TrustTier.MEDIUM, inj.injectMetadata(nc, InputOrigin.MEMORY).trustTier());
+        assertEquals(TrustTier.MEDIUM, new DefaultMetadataInjector()
+                .injectMetadata(new NormalizedContent("x", Map.of()), InputOrigin.MEMORY).trustTier());
     }
 
     @Test
     public void metadataInjector_externalOriginGivesLowTrust() {
-        DefaultMetadataInjector inj = new DefaultMetadataInjector();
-        NormalizedContent nc = new NormalizedContent("text", Map.of());
-        assertEquals(TrustTier.LOW, inj.injectMetadata(nc, InputOrigin.EXTERNAL).trustTier());
+        assertEquals(TrustTier.LOW, new DefaultMetadataInjector()
+                .injectMetadata(new NormalizedContent("x", Map.of()), InputOrigin.EXTERNAL).trustTier());
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -132,22 +119,23 @@ public class PerceptionTest {
     // ───────────────────────────────────────────────────────────────────────
 
     private AnnotatedContent makeAC(String text) {
-        NormalizedContent nc = new NormalizedContent(text, Map.of());
-        return new AnnotatedContent(nc, InputOrigin.USER, TrustTier.HIGH, Instant.now(), "test");
+        return new AnnotatedContent(
+                new NormalizedContent(text, Map.of()),
+                InputOrigin.USER, TrustTier.HIGH, Instant.now(), "test");
     }
 
     @Test
     public void tokenBudget_zeroBudgetPassthrough() {
         TokenBudgetManager mgr = new TokenBudgetManager(TokenEstimator.heuristic());
         AnnotatedContent ac = makeAC("some text");
-        assertSame(ac, mgr.enforceTokenBudget(ac, 0), "budget=0 must return identity");
+        assertSame(ac, mgr.enforceTokenBudget(ac, 0));
     }
 
     @Test
     public void tokenBudget_withinBudgetPassthrough() {
         TokenBudgetManager mgr = new TokenBudgetManager(TokenEstimator.heuristic());
-        AnnotatedContent ac = makeAC("hi");
-        assertSame(ac, mgr.enforceTokenBudget(ac, 10), "within budget -> identity");
+        AnnotatedContent ac = makeAC("hi"); // 2 chars = 0 tokens (2/4=0) < 10
+        assertSame(ac, mgr.enforceTokenBudget(ac, 10));
     }
 
     @Test
@@ -155,7 +143,7 @@ public class PerceptionTest {
         TokenBudgetManager mgr = new TokenBudgetManager(TokenEstimator.heuristic());
         String longText = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMN"; // 40 chars = 10 tokens
         AnnotatedContent result = mgr.enforceTokenBudget(makeAC(longText), 2);
-        assertTrue(result.content().text().length() <= 8, "text truncated to budget*4 chars");
+        assertTrue(result.content().text().length() <= 8);
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -164,45 +152,52 @@ public class PerceptionTest {
 
     @Test
     public void pipeline_defaults_processText() {
-        InputNormalizationPipeline pipeline = InputNormalizationPipeline.defaults();
-        AnnotatedContent ac = pipeline.process("  Hello   World  ", InputOrigin.USER, 4096);
-        assertEquals("Hello World", ac.content().text(), "whitespace normalised");
-        assertEquals(TrustTier.HIGH, ac.trustTier(), "USER -> HIGH trust");
+        AnnotatedContent ac = InputNormalizationPipeline.defaults()
+                .process("  Hello   World  ", InputOrigin.USER, 4096);
+        assertEquals("Hello World", ac.content().text());
+        assertEquals(TrustTier.HIGH, ac.trustTier());
     }
 
     @Test
     public void pipeline_defaults_processJson() {
-        InputNormalizationPipeline pipeline = InputNormalizationPipeline.defaults();
-        AnnotatedContent ac = pipeline.process("{\"k\":\"v\"}", InputOrigin.TOOL, 4096);
-        assertEquals(TrustTier.MEDIUM, ac.trustTier(), "TOOL -> MEDIUM trust");
+        AnnotatedContent ac = InputNormalizationPipeline.defaults()
+                .process("{\"k\":\"v\"}", InputOrigin.TOOL, 4096);
+        assertEquals(TrustTier.MEDIUM, ac.trustTier());
     }
 
     @Test
     public void pipeline_defaults_budgetEnforced() {
-        InputNormalizationPipeline pipeline = InputNormalizationPipeline.defaults();
         String longText = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMN";
-        AnnotatedContent ac = pipeline.process(longText, InputOrigin.USER, 2);
-        assertTrue(ac.content().text().length() <= 8, "budget truncation applied end-to-end");
+        AnnotatedContent ac = InputNormalizationPipeline.defaults()
+                .process(longText, InputOrigin.USER, 2);
+        assertTrue(ac.content().text().length() <= 8);
     }
 
     // ───────────────────────────────────────────────────────────────────────
     // SimplePerception
     // ───────────────────────────────────────────────────────────────────────
 
+    /** Helper: builds a WorkingMemoryEntry with sensible defaults. */
+    private static WorkingMemoryEntry wme(Origin origin, String content) {
+        return new WorkingMemoryEntry(
+                UUID.randomUUID().toString(), content,
+                WorkingMemoryTier.ACTIVE, origin,
+                1.0, Instant.now(), TaintLabel.CLEAN);
+    }
+
     private DefaultExecutionContext makeCtx(String instruction) {
-        Task t = Task.builder().instruction(instruction).build();
-        return new DefaultExecutionContext(t, "t1", "u1");
+        return new DefaultExecutionContext(
+                Task.builder().instruction(instruction).build(), "t1", "u1");
     }
 
     @Test
     public void simplePerception_userEntry_producesObservation() {
         DefaultExecutionContext ctx = makeCtx("do X");
-        ctx.workingMemory().add(Origin.USER, "user message", TaintLabel.CLEAN);
+        ctx.workingMemory().add(wme(Origin.USER, "user message"));
 
-        SimplePerception p = new SimplePerception();
-        Observations obs = p.perceive(ctx);
+        Observations obs = new SimplePerception().perceive(ctx);
 
-        assertEquals(1, obs.items().size(), "one observation from one WM entry");
+        assertEquals(1, obs.items().size());
         assertEquals("user message", obs.items().get(0).content());
         assertEquals(TrustTier.HIGH, obs.items().get(0).trustTier());
     }
@@ -210,10 +205,9 @@ public class PerceptionTest {
     @Test
     public void simplePerception_toolEntry_producesObservation() {
         DefaultExecutionContext ctx = makeCtx("do Y");
-        ctx.workingMemory().add(Origin.TOOL, "tool result", TaintLabel.CLEAN);
+        ctx.workingMemory().add(wme(Origin.TOOL, "tool result"));
 
-        SimplePerception p = new SimplePerception();
-        Observations obs = p.perceive(ctx);
+        Observations obs = new SimplePerception().perceive(ctx);
 
         assertEquals(1, obs.items().size());
         assertEquals(Origin.TOOL, obs.items().get(0).origin());
@@ -222,35 +216,30 @@ public class PerceptionTest {
     @Test
     public void simplePerception_emptyWM_fallsBackToGoal() {
         DefaultExecutionContext ctx = makeCtx("find the answer");
-        Goal root = new Goal("root", null, GoalStatus.ACTIVE,
-                "find the answer", java.util.List.of(), Budget.unlimited());
-        ctx.goalStack().push(root);
+        ctx.goalStack().push(new Goal("root", null, GoalStatus.ACTIVE,
+                "find the answer", java.util.List.of(), Budget.unlimited()));
 
-        SimplePerception p = new SimplePerception();
-        Observations obs = p.perceive(ctx);
+        Observations obs = new SimplePerception().perceive(ctx);
 
-        assertEquals(1, obs.items().size(), "goal description becomes seed observation");
+        assertEquals(1, obs.items().size());
         assertEquals("find the answer", obs.items().get(0).content());
         assertEquals(Origin.SYSTEM, obs.items().get(0).origin());
     }
 
     @Test
     public void simplePerception_emptyWMAndNoGoal_returnsEmpty() {
-        DefaultExecutionContext ctx = makeCtx("task");
-        SimplePerception p = new SimplePerception();
-        Observations obs = p.perceive(ctx);
-        assertTrue(obs.items().isEmpty(), "empty WM + no goal -> empty observations");
+        Observations obs = new SimplePerception().perceive(makeCtx("task"));
+        assertTrue(obs.items().isEmpty());
     }
 
     @Test
     public void simplePerception_marksEntriesProcessed() {
         DefaultExecutionContext ctx = makeCtx("do Z");
-        ctx.workingMemory().add(Origin.USER, "msg", TaintLabel.CLEAN);
+        ctx.workingMemory().add(wme(Origin.USER, "msg"));
 
         SimplePerception p = new SimplePerception();
         p.perceive(ctx);
-
-        Observations second = p.perceive(ctx);
-        assertTrue(second.items().isEmpty(), "already-processed entries not re-emitted");
+        assertTrue(new SimplePerception().perceive(ctx).items().isEmpty(),
+                "already-processed entries must not be re-emitted");
     }
 }

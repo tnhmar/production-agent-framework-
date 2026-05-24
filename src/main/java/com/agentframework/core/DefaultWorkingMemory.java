@@ -3,35 +3,55 @@ package com.agentframework.core;
 import com.agentframework.foundation.*;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 /**
  * Default in-memory working memory implementation.
  *
- * <p>M2 fix: {@link #evictLowestRelevance(int)} is now tier-aware.
+ * <p><b>M2 fix:</b> {@link #evictLowestRelevance(int)} is tier-aware.
  * Eviction priority: ARCHIVED → COMPRESSED → BACKGROUND → ACTIVE.
- * Within the same tier, entries are sorted by ascending relevance score (lowest evicted first).
+ * Within the same tier, entries are sorted by ascending relevance score
+ * (lowest evicted first).
  *
- * <p>IC4 fix: evicted entries are removed from the processed set to prevent
- * ghost references in {@link #getUnprocessed()}.
+ * <p><b>IC4 fix:</b> evicted entries are removed from the processed set
+ * to prevent ghost references in {@link #getUnprocessed()}.
+ *
+ * <p><b>WM-1 fix:</b> all mutation paths ({@code add}, {@code evictOldest},
+ * {@code evictLowestRelevance}, {@code compress}, {@code clear}) now
+ * synchronise on the {@code entries} list — the same monitor — eliminating
+ * the TOCTOU race that existed when {@code add()} was unsynchronised while
+ * eviction methods held the lock.
  */
 public class DefaultWorkingMemory implements WorkingMemory {
-    private final List<WorkingMemoryEntry> entries   = Collections.synchronizedList(new ArrayList<>());
-    private final Set<String>              processed = ConcurrentHashMap.newKeySet();
 
-    public void add(WorkingMemoryEntry e) { entries.add(e); }
+    private final List<WorkingMemoryEntry> entries   = new ArrayList<>();
+    private final Set<String>              processed = Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
 
-    public List<WorkingMemoryEntry> getAll()              { return new ArrayList<>(entries); }
+    /** WM-1 fix: synchronise add() on the same monitor as eviction methods. */
+    public void add(WorkingMemoryEntry e) {
+        synchronized (entries) {
+            entries.add(e);
+        }
+    }
+
+    public List<WorkingMemoryEntry> getAll() {
+        synchronized (entries) {
+            return new ArrayList<>(entries);
+        }
+    }
 
     public List<WorkingMemoryEntry> getByOrigin(Origin o) {
-        return entries.stream().filter(e -> e.origin() == o).collect(Collectors.toList());
+        synchronized (entries) {
+            return entries.stream().filter(e -> e.origin() == o).collect(Collectors.toList());
+        }
     }
 
     public List<WorkingMemoryEntry> getUnprocessed() {
-        return entries.stream()
-            .filter(e -> !processed.contains(e.id()))
-            .collect(Collectors.toList());
+        synchronized (entries) {
+            return entries.stream()
+                .filter(e -> !processed.contains(e.id()))
+                .collect(Collectors.toList());
+        }
     }
 
     public void    markProcessed(String id)  { processed.add(id); }
@@ -46,8 +66,9 @@ public class DefaultWorkingMemory implements WorkingMemory {
 
     /**
      * M2 fix: tier-aware eviction.
-     * Sort order: tier priority ascending (ARCHIVED=0 ... ACTIVE=3), then relevance ascending.
-     * Lowest-priority, lowest-relevance entries are removed first.
+     * Sort order: tier priority ascending (ARCHIVED=0 ... ACTIVE=3),
+     * then relevance ascending. Lowest-priority, lowest-relevance entries
+     * are removed first.
      */
     public void evictLowestRelevance(int n) {
         synchronized (entries) {
@@ -64,7 +85,7 @@ public class DefaultWorkingMemory implements WorkingMemory {
         int del = Math.min(n, entries.size());
         List<WorkingMemoryEntry> toRemove = new ArrayList<>(entries.subList(0, del));
         entries.subList(0, del).clear();
-        toRemove.forEach(e -> processed.remove(e.id())); // IC4: clean ghost references
+        toRemove.forEach(e -> processed.remove(e.id()));
     }
 
     /**
@@ -76,24 +97,38 @@ public class DefaultWorkingMemory implements WorkingMemory {
             case ARCHIVED    -> 0;
             case COMPRESSED  -> 1;
             case BACKGROUND,
-                 SECONDARY   -> 2;   // SECONDARY is deprecated alias for BACKGROUND
+                 SECONDARY   -> 2;
             case ACTIVE      -> 3;
         };
     }
 
     public void compress(List<String> ids, String summary) {
-        ids.forEach(id -> {
-            entries.removeIf(e -> e.id().equals(id));
-            processed.remove(id); // IC4: clean on compress too
-        });
-        add(new WorkingMemoryEntry(UUID.randomUUID().toString(), summary,
-            WorkingMemoryTier.COMPRESSED, Origin.SYSTEM, 0.5, Instant.now(), TaintLabel.CLEAN));
+        synchronized (entries) {
+            ids.forEach(id -> {
+                entries.removeIf(e -> e.id().equals(id));
+                processed.remove(id);
+            });
+            entries.add(new WorkingMemoryEntry(
+                UUID.randomUUID().toString(), summary,
+                WorkingMemoryTier.COMPRESSED, Origin.SYSTEM,
+                0.5, Instant.now(), TaintLabel.CLEAN));
+        }
     }
 
     public int estimatedTokenCount() {
-        return entries.stream().mapToInt(e -> e.content().length() / 4).sum();
+        synchronized (entries) {
+            return entries.stream().mapToInt(e -> e.content().length() / 4).sum();
+        }
     }
 
-    public int  size()  { return entries.size(); }
-    public void clear() { entries.clear(); processed.clear(); }
+    public int size() {
+        synchronized (entries) { return entries.size(); }
+    }
+
+    public void clear() {
+        synchronized (entries) {
+            entries.clear();
+            processed.clear();
+        }
+    }
 }

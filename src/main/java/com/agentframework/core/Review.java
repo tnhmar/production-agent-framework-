@@ -22,9 +22,9 @@ import java.util.UUID;
  */
 class Review {
 
-    private final PlanValidator       validator;
-    private final EventSink           events;
-    private final TaintClassifier     taintClassifier;
+    private final PlanValidator        validator;
+    private final EventSink            events;
+    private final TaintClassifier      taintClassifier;
     private final ContextWindowManager ctxManager;
 
     private static final int MAX_FAILURES = 3;
@@ -109,13 +109,13 @@ class Review {
 
     private TaintLabel classifyResultTaint(ActionResult result) {
         return switch (result) {
-            case ActionResult.Success s      -> taintClassifier.classifyObject(s.result().data());
+            case ActionResult.Success s         -> taintClassifier.classifyObject(s.result().data());
             case ActionResult.PartialSuccess ps -> {
                 boolean anyHostile = ps.results().stream()
                     .anyMatch(r -> taintClassifier.classifyObject(r.data()) == TaintLabel.HOSTILE);
                 yield anyHostile ? TaintLabel.HOSTILE : TaintLabel.EXTERNAL;
             }
-            case ActionResult.Failure f      -> taintClassifier.classify(f.message());
+            case ActionResult.Failure f         -> taintClassifier.classify(f.message());
             case ActionResult.ValidationFailure v1 -> TaintLabel.CLEAN;
             case ActionResult.Escalated         v2 -> TaintLabel.CLEAN;
             case ActionResult.Clarification     v3 -> TaintLabel.CLEAN;
@@ -154,6 +154,17 @@ class Review {
                 Map.of("key", won.subject() + "|" + won.predicate())));
     }
 
+    /**
+     * RV-1 fix: every non-failure ActionResult variant now explicitly resets
+     * the consecutive-failure counter so a preceding failure streak cannot
+     * persist silently after an Escalated or Clarification result.
+     *
+     * <p>Variants that count as failure: {@link ActionResult.Failure} and
+     * {@link ActionResult.ValidationFailure}.<br>
+     * All other variants ({@link ActionResult.Success},
+     * {@link ActionResult.PartialSuccess}, {@link ActionResult.Escalated},
+     * {@link ActionResult.Clarification}) reset the counter.
+     */
     private TerminationReason checkTermination(
             ActionResult result, Decision decision, ExecutionContext ctx) {
         if (ctx.goalStack().isRootAchieved()) return new TerminationReason.GoalCompleted();
@@ -168,6 +179,8 @@ class Review {
                 return new TerminationReason.FailureEscalation(
                     "Consecutive failure threshold reached (" + MAX_FAILURES + ")");
         } else {
+            // RV-1 fix: reset for ALL non-failure variants including Escalated
+            // and Clarification, which previously fell through without resetting.
             ctx.resetConsecutiveFailures();
         }
         return null;

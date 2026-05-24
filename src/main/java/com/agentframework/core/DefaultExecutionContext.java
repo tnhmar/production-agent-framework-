@@ -8,6 +8,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -18,18 +19,16 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li>Run identity: {@code runId}, {@code state}, {@code cycle}</li>
  *   <li>Goals: {@code id:status} for every goal on the stack</li>
- *   <li>Working memory: {@code id:contentHash} for every entry
- *       (content is included so payload tampering is detected)</li>
- *   <li>Beliefs: {@code subject:predicate:objectHash:confidence} for every belief
- *       (SPO model: subject, predicate, <b>object</b> — not value)</li>
+ *   <li>Working memory: {@code id:contentHash} for every entry</li>
+ *   <li>Beliefs: {@code subject:predicate:objectHash:confidence}</li>
  *   <li>Liveness counters: {@code consFailures}, {@code stagnantCycles},
  *       {@code stuckCycles}, {@code revisions}</li>
  *   <li>Accumulators: {@code totalTokens}, {@code totalCost}</li>
  * </ul>
  *
- * <p>{@link NoSuchAlgorithmException} from SHA-256 throws
- * {@link IllegalStateException} — SHA-256 is mandated by the JVM spec; its
- * absence indicates a non-compliant environment and must fail fast.
+ * <p><b>N-EC-1 fix:</b> {@code totalTokens} is now an {@link AtomicInteger};
+ * {@code addCost} is {@code synchronized} on {@code this}. Both accumulators
+ * are safe under concurrent parallel tool execution.
  */
 public class DefaultExecutionContext implements ExecutionContext {
 
@@ -54,8 +53,11 @@ public class DefaultExecutionContext implements ExecutionContext {
     private final DefaultBeliefState   beliefState   = new DefaultBeliefState();
     private final Map<String, JobToken> activeJobs   = new ConcurrentHashMap<>();
     private final List<CycleRecord>     trace        = Collections.synchronizedList(new ArrayList<>());
-    private int        totalTokens = 0;
-    private BigDecimal totalCost   = BigDecimal.ZERO;
+
+    // N-EC-1 fix: thread-safe accumulators
+    private final AtomicInteger  totalTokens = new AtomicInteger(0);
+    private       BigDecimal     totalCost   = BigDecimal.ZERO;
+
     private TerminationReason terminationReason;
 
     public DefaultExecutionContext(Task task, String tenantId, String userId) {
@@ -107,10 +109,17 @@ public class DefaultExecutionContext implements ExecutionContext {
     public Map<String, JobToken> activeJobs()  { return activeJobs; }
     public void    recordCycle(CycleRecord r)  { trace.add(r); }
     public List<CycleRecord> trace()           { return new ArrayList<>(trace); }
-    public int        totalTokensUsed()        { return totalTokens; }
-    public void       addTokens(int n)         { totalTokens += n; }
-    public BigDecimal totalCost()              { return totalCost; }
-    public void       addCost(BigDecimal c)    { totalCost = totalCost.add(c); }
+
+    /** N-EC-1 fix: atomic read. */
+    public int        totalTokensUsed()        { return totalTokens.get(); }
+
+    /** N-EC-1 fix: atomic increment. */
+    public void       addTokens(int n)         { totalTokens.addAndGet(n); }
+
+    /** N-EC-1 fix: synchronised BigDecimal accumulation. */
+    public synchronized BigDecimal totalCost() { return totalCost; }
+    public synchronized void addCost(BigDecimal c) { totalCost = totalCost.add(c); }
+
     public Optional<TerminationReason> terminationReason() { return Optional.ofNullable(terminationReason); }
     public void setTerminationReason(TerminationReason r)  { terminationReason = r; }
 
@@ -123,7 +132,7 @@ public class DefaultExecutionContext implements ExecutionContext {
         String hash = computeHash(
             runId, state, cycle,
             goals, wm, beliefs,
-            totalTokens, totalCost,
+            totalTokens.get(), totalCost(),
             consFailures, stagnantCycles, stuckCycles, revisions);
         return new FullSnapshot(
             runId, state, cycle,
@@ -131,21 +140,19 @@ public class DefaultExecutionContext implements ExecutionContext {
             Collections.unmodifiableList(new ArrayList<>(goals)),
             Collections.unmodifiableList(new ArrayList<>(wm)),
             Collections.unmodifiableList(new ArrayList<>(beliefs)),
-            totalTokens, totalCost,
+            totalTokens.get(), totalCost(),
             consFailures, stagnantCycles, stuckCycles, revisions,
             hash);
     }
 
     /**
      * Restores all mutable execution state from a persisted snapshot.
-     * All liveness counters are included so an agent that exhausted its
-     * failure budget before a HITL suspend cannot reset those counters on resume.
      */
     public void restoreFromSnapshot(Snapshot snap) {
         this.cycle          = snap.cycle();
         this.state          = snap.state();
-        this.totalTokens    = snap.totalTokens();
-        this.totalCost      = snap.totalCost();
+        this.totalTokens.set(snap.totalTokens());
+        synchronized (this) { this.totalCost = snap.totalCost(); }
         this.consFailures   = snap.consecutiveFailures();
         this.stagnantCycles = snap.stagnantCycles();
         this.stuckCycles    = snap.stuckCycles();
@@ -174,7 +181,6 @@ public class DefaultExecutionContext implements ExecutionContext {
             List<Belief> beliefs, int tokens, BigDecimal cost,
             int consFailures, int stagnantCycles, int stuckCycles, int revisions) {
         try {
-            // Belief uses the SPO model: subject / predicate / object (not 'value').
             String canonical = runId + "|" + state + "|" + cycle
                 + "|goals=" + goals.stream()
                     .map(g -> g.id() + ":" + g.status())
@@ -184,7 +190,7 @@ public class DefaultExecutionContext implements ExecutionContext {
                     .collect(Collectors.joining(","))
                 + "|beliefs=" + beliefs.stream()
                     .map(b -> b.subject() + ":" + b.predicate()
-                        + ":" + contentHash(b.object())   // SPO: field is 'object'
+                        + ":" + contentHash(b.object())
                         + ":" + b.confidence())
                     .collect(Collectors.joining(","))
                 + "|liveness=" + consFailures + ":" + stagnantCycles

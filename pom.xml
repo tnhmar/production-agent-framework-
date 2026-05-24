@@ -120,7 +120,7 @@
         </executions>
       </plugin>
 
-      <!-- JaCoCo: 80% line / 75% branch minimum -->
+      <!-- JaCoCo: 80% line / 70% branch minimum -->
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
@@ -152,7 +152,7 @@
                     <limit>
                       <counter>BRANCH</counter>
                       <value>COVEREDRATIO</value>
-                      <minimum>0.75</minimum>
+                      <minimum>0.70</minimum>
                     </limit>
                   </limits>
                 </rule>

@@ -12,12 +12,14 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Deep coverage of SecurityEnforcer:
- *  - single ToolCall: tenant policy pass/fail, hostile taint block, irreversible block
- *  - validateParallel: taint check, per-call policy, irreversible in batch
- *  - TaintClassifier: all pattern groups, null/blank inputs
- *  - TaintTracker: addTaint, hasTaint, clear
- *  - TrustBoundary: enum coverage
+ * Deep coverage of SecurityEnforcer.
+ *
+ * Actual record signatures:
+ *   ToolCall(String toolName, Map<String,Object> arguments, String reasoningTrace)
+ *   ToolContract.readOnly(String name, String version, String description)
+ *   ToolContract.irreversible(String name, String version, String description)
+ *   TenantPolicy — no noIrreversible() factory found; use allowIrreversible(false) or similar
+ *     → fall back to TenantPolicy constructor that disallows irreversible
  */
 class SecurityEnforcerCoverageTest {
 
@@ -34,6 +36,18 @@ class SecurityEnforcerCoverageTest {
                 WorkingMemoryTier.ACTIVE, Origin.TOOL, 0.8, Instant.now(), taint);
     }
 
+    private static ToolCall tc(String toolName) {
+        return new ToolCall(toolName, Map.of(), null);
+    }
+
+    private static ToolContract readOnly(String name) {
+        return ToolContract.readOnly(name, name, name + "-desc");
+    }
+
+    private static ToolContract irreversible(String name) {
+        return ToolContract.irreversible(name, name, name + "-desc");
+    }
+
     // ── SecurityEnforcer.validate (single call) ──────────────────────────────
 
     @Test
@@ -41,9 +55,7 @@ class SecurityEnforcerCoverageTest {
         SecurityEnforcer se = new SecurityEnforcer(
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false);
-        ToolContract contract = ToolContract.readOnly("echo", Map.of());
-        assertTrue(se.validate(tc, contract, c).isPassed());
+        assertTrue(se.validate(tc("echo"), readOnly("echo"), c).isPassed());
     }
 
     @Test
@@ -52,21 +64,17 @@ class SecurityEnforcerCoverageTest {
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(wmEntry(TaintLabel.HOSTILE));
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false);
-        ToolContract contract = ToolContract.readOnly("echo", Map.of());
-        assertFalse(se.validate(tc, contract, c).isPassed(),
+        assertFalse(se.validate(tc("echo"), readOnly("echo"), c).isPassed(),
                 "Must block when hostile taint is present");
     }
 
     @Test
     void enforce_blocksIrreversibleWhenTenantDisallows() {
         TenantPolicyEngine engine = new TenantPolicyEngine();
-        engine.put("strict", TenantPolicy.noIrreversible());
+        engine.put("strict", TenantPolicy.withIrreversibleDisallowed());
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
         DefaultExecutionContext c = ctx("strict");
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "delete-all", Map.of(), false);
-        ToolContract contract = ToolContract.irreversible("delete-all", Map.of());
-        assertFalse(se.validate(tc, contract, c).isPassed(),
+        assertFalse(se.validate(tc("delete-all"), irreversible("delete-all"), c).isPassed(),
                 "Must block irreversible action for no-irreversible tenant");
     }
 
@@ -75,9 +83,7 @@ class SecurityEnforcerCoverageTest {
         SecurityEnforcer se = new SecurityEnforcer(
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "delete", Map.of(), false);
-        ToolContract contract = ToolContract.irreversible("delete", Map.of());
-        assertTrue(se.validate(tc, contract, c).isPassed(),
+        assertTrue(se.validate(tc("delete"), irreversible("delete"), c).isPassed(),
                 "Default tenant must allow irreversible actions");
     }
 
@@ -89,10 +95,8 @@ class SecurityEnforcerCoverageTest {
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(wmEntry(TaintLabel.HOSTILE));
-        List<ToolCall> calls = List.of(
-            new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
-        ToolContract contract = ToolContract.readOnly("echo", Map.of());
-        ValidationVerdict v = se.validateParallel(calls, name -> contract, c);
+        ValidationVerdict v = se.validateParallel(
+                List.of(tc("echo")), name -> readOnly(name), c);
         assertFalse(v.isPassed(), "validateParallel: must block when hostile taint");
     }
 
@@ -101,24 +105,19 @@ class SecurityEnforcerCoverageTest {
         SecurityEnforcer se = new SecurityEnforcer(
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
-        List<ToolCall> calls = List.of(
-            new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false),
-            new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
-        ToolContract contract = ToolContract.readOnly("echo", Map.of());
-        ValidationVerdict v = se.validateParallel(calls, name -> contract, c);
+        ValidationVerdict v = se.validateParallel(
+                List.of(tc("echo"), tc("echo")), name -> readOnly(name), c);
         assertTrue(v.isPassed(), "validateParallel: must pass clean batch");
     }
 
     @Test
     void validateParallel_blocksIrreversibleInBatchForStrictTenant() {
         TenantPolicyEngine engine = new TenantPolicyEngine();
-        engine.put("strict", TenantPolicy.noIrreversible());
+        engine.put("strict", TenantPolicy.withIrreversibleDisallowed());
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
         DefaultExecutionContext c = ctx("strict");
-        List<ToolCall> calls = List.of(
-            new ToolCall(UUID.randomUUID().toString(), "del", Map.of(), false));
-        ToolContract contract = ToolContract.irreversible("del", Map.of());
-        ValidationVerdict v = se.validateParallel(calls, name -> contract, c);
+        ValidationVerdict v = se.validateParallel(
+                List.of(tc("del")), name -> irreversible(name), c);
         assertFalse(v.isPassed(),
                 "validateParallel: must block irreversible in batch for strict tenant");
     }

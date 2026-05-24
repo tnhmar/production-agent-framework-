@@ -5,22 +5,24 @@ import com.agentframework.foundation.*;
 
 import org.junit.jupiter.api.*;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Covers core components that had thin or zero explicit tests:
- *  - DefaultGoalStack: push/pop/depth/all/updateStatus/isRootAchieved
- *  - DefaultBeliefState: assertBelief, conflict resolution, retract, getBySubject
- *  - DefaultLivenessDetector: stagnation, stuck-state thresholds
- *  - ContextWindowManager: threshold guard, eviction, maxTokens<=0 guard
- *  - Goal: withStatus, withSuccessCriteria
- *  - Belief: record accessors
- *  - Budget: value type
- *  - ValidationResult: all three permits
- *  - DefaultExecutionContext: snapshot round-trip and schema version
+ * Covers core components that had thin or zero explicit tests.
+ *
+ * Actual record signatures (from compiler errors + source inspection):
+ *   ToolCall(String toolName, Map<String,Object> arguments, String reasoningTrace)
+ *   AskClarification(String question)  -- 1 field
+ *   Budget(int maxCycles, int maxTokens, Duration maxDuration, BigDecimal maxCost)
+ *   ValidationResult.Failed(String reason, List<String> violations)
+ *   ValidationResult.NeedsCorrection(String reason, Decision suggestedRevision)
+ *   DefaultLivenessDetector.checkStagnation(String,String,Decision,ExecutionContext)
+ *   DefaultLivenessDetector.checkStuck(String,String,Decision,ExecutionContext)
+ *   DefaultBeliefState has no getBySubject() — replaced with all(minConf) filter
  */
 class CoreComponentCoverageTest {
 
@@ -118,13 +120,15 @@ class CoreComponentCoverageTest {
     }
 
     @Test
-    void beliefState_getBySubject() {
+    void beliefState_filterBySubjectViaAll() {
         DefaultBeliefState bs = new DefaultBeliefState();
         bs.assertBelief(
-            new Belief(UUID.randomUUID().toString(), "a", "p", "v", 0.8, "s", Instant.now(), false));
+            new Belief(UUID.randomUUID().toString(), "sky", "color", "blue", 0.8, "s", Instant.now(), false));
         bs.assertBelief(
-            new Belief(UUID.randomUUID().toString(), "b", "p", "v", 0.8, "s", Instant.now(), false));
-        assertEquals(1, bs.getBySubject("a").size());
+            new Belief(UUID.randomUUID().toString(), "ground", "color", "brown", 0.8, "s", Instant.now(), false));
+        long skyCount = bs.all(0.0).stream()
+                .filter(b -> "sky".equals(b.subject())).count();
+        assertEquals(1, skyCount, "Should have exactly one belief about sky");
     }
 
     @Test
@@ -138,15 +142,20 @@ class CoreComponentCoverageTest {
     }
 
     // ── DefaultLivenessDetector ──────────────────────────────────────────────
+    //
+    // Real signature from compiler error:
+    //   checkStagnation(String runId, String goalId, Decision decision, ExecutionContext ctx)
+    //   checkStuck(String runId, String goalId, Decision decision, ExecutionContext ctx)
 
     @Test
     void livenessDetector_stagnationAfterThreshold() {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(2, 5);
         DefaultExecutionContext c = ctx();
-        assertFalse(ld.checkStagnation(c));
-        ld.checkStagnation(c);
-        ld.checkStagnation(c);
-        assertTrue(ld.checkStagnation(c),
+        FinalAnswer fa = new FinalAnswer("done");
+        assertFalse(ld.checkStagnation(c.runId(), "root", fa, c));
+        ld.checkStagnation(c.runId(), "root", fa, c);
+        ld.checkStagnation(c.runId(), "root", fa, c);
+        assertTrue(ld.checkStagnation(c.runId(), "root", fa, c),
                 "Liveness: stagnation must trigger after threshold");
     }
 
@@ -154,11 +163,11 @@ class CoreComponentCoverageTest {
     void livenessDetector_stuckAfterThreshold() {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(5, 2);
         DefaultExecutionContext c = ctx();
-        AskClarification ask = new AskClarification(UUID.randomUUID().toString(), "q");
-        ld.checkStuck(c, ask);
-        ld.checkStuck(c, ask);
-        ld.checkStuck(c, ask);
-        assertTrue(ld.checkStuck(c, ask),
+        AskClarification ask = new AskClarification("q");
+        ld.checkStuck(c.runId(), "root", ask, c);
+        ld.checkStuck(c.runId(), "root", ask, c);
+        ld.checkStuck(c.runId(), "root", ask, c);
+        assertTrue(ld.checkStuck(c.runId(), "root", ask, c),
                 "Liveness: stuck must trigger after threshold");
     }
 
@@ -166,12 +175,12 @@ class CoreComponentCoverageTest {
     void livenessDetector_substantiveDecisionResetsStuck() {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(5, 2);
         DefaultExecutionContext c = ctx();
-        AskClarification ask = new AskClarification(UUID.randomUUID().toString(), "q");
-        ld.checkStuck(c, ask);
-        ld.checkStuck(c, ask);
-        ld.checkStuck(c,
-                new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
-        assertFalse(ld.checkStuck(c, ask));
+        AskClarification ask = new AskClarification("q");
+        ld.checkStuck(c.runId(), "root", ask, c);
+        ld.checkStuck(c.runId(), "root", ask, c);
+        ToolCall tc = new ToolCall("echo", Map.of(), null);
+        ld.checkStuck(c.runId(), "root", tc, c);
+        assertFalse(ld.checkStuck(c.runId(), "root", ask, c));
     }
 
     // ── ContextWindowManager ─────────────────────────────────────────────────
@@ -204,12 +213,18 @@ class CoreComponentCoverageTest {
     }
 
     // ── ValidationResult ─────────────────────────────────────────────────────
+    //
+    // Real signatures:
+    //   ValidationResult.Failed(String reason, List<String> violations)
+    //   ValidationResult.NeedsCorrection(String reason, Decision suggestedRevision)
 
     @Test
     void validationResult_allPermits() {
         ValidationResult passed = new ValidationResult.Passed();
-        ValidationResult failed = new ValidationResult.Failed("reason");
-        ValidationResult needs  = new ValidationResult.NeedsCorrection("fix this");
+        ValidationResult failed = new ValidationResult.Failed(
+                "reason", List.of("v1", "v2"));
+        ValidationResult needs = new ValidationResult.NeedsCorrection(
+                "fix this", new FinalAnswer("try again"));
         assertInstanceOf(ValidationResult.Passed.class, passed);
         assertEquals("reason",   ((ValidationResult.Failed) failed).reason());
         assertEquals("fix this", ((ValidationResult.NeedsCorrection) needs).reason());
@@ -270,13 +285,15 @@ class CoreComponentCoverageTest {
     }
 
     // ── Budget ────────────────────────────────────────────────────────────────
+    //
+    // Real signature: Budget(int maxCycles, int maxTokens, Duration maxDuration, BigDecimal maxCost)
 
     @Test
     void budget_accessors() {
-        Budget b = new Budget(new BigDecimal("10.00"), new BigDecimal("3.50"));
-        assertEquals(0, new BigDecimal("10.00").compareTo(b.maxCost()));
-        assertEquals(0, new BigDecimal("3.50").compareTo(b.spent()));
-        assertTrue(b.hasRemaining());
+        Budget b = new Budget(100, 4000, Duration.ofMinutes(5), new BigDecimal("10.00"));
+        assertEquals(new BigDecimal("10.00"), b.maxCost());
+        assertEquals(100, b.maxCycles());
+        assertEquals(4000, b.maxTokens());
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

@@ -1,7 +1,6 @@
 package com.agentframework.tests;
 
 import com.agentframework.action.*;
-import com.agentframework.action.middleware.*;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
 import com.agentframework.hitl.*;
@@ -38,6 +37,21 @@ class DefectRegressionTest {
                 Origin.TOOL, 0.8, Instant.now(), taint);
     }
 
+    /** Creates a ToolCall with no reasoningTrace. */
+    private static ToolCall tc(String toolName) {
+        return new ToolCall(toolName, Map.of(), null);
+    }
+
+    /** Creates a ToolContract using the 3-arg readOnly factory. */
+    private static ToolContract readOnly(String name) {
+        return ToolContract.readOnly(name, name, name + "-desc");
+    }
+
+    /** Creates a ToolContract using the 3-arg irreversible factory. */
+    private static ToolContract irreversible(String name) {
+        return ToolContract.irreversible(name, name, name + "-desc");
+    }
+
     // ── DA-1: parallel batch blocked when hostile taint in working memory ───
 
     @Test
@@ -49,24 +63,19 @@ class DefectRegressionTest {
         TenantPolicyEngine policyEngine = new TenantPolicyEngine();
         SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
 
-        ToolContract contract = ToolContract.readOnly("echo", Map.of());
         SimpleToolRegistry registry = new SimpleToolRegistry();
-        registry.register("echo", contract,
+        registry.register(readOnly("echo"),
                 inv -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
-                new PassThroughToolMiddleware(),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
 
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo",
-                Map.of("msg", "hello"), false);
         ParallelToolCalls parallel = new ParallelToolCalls(
-                UUID.randomUUID().toString(),
-                List.of(tc), Duration.ofSeconds(5), true);
+                List.of(tc("echo")), false, Duration.ofSeconds(5));
 
         ActionResult result = action.execute(parallel, c);
         assertInstanceOf(ActionResult.ValidationFailure.class, result,
@@ -82,24 +91,19 @@ class DefectRegressionTest {
         TenantPolicyEngine policyEngine = new TenantPolicyEngine();
         SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
 
-        ToolContract contract = ToolContract.readOnly("echo", Map.of());
         SimpleToolRegistry registry = new SimpleToolRegistry();
-        registry.register("echo", contract,
+        registry.register(readOnly("echo"),
                 inv -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
-                new PassThroughToolMiddleware(),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
 
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo",
-                Map.of("msg", "hello"), false);
         ParallelToolCalls parallel = new ParallelToolCalls(
-                UUID.randomUUID().toString(),
-                List.of(tc), Duration.ofSeconds(5), true);
+                List.of(tc("echo")), false, Duration.ofSeconds(5));
 
         ActionResult result = action.execute(parallel, c);
         assertInstanceOf(ActionResult.PartialSuccess.class, result,
@@ -228,9 +232,10 @@ class DefectRegressionTest {
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(entry("h1", "evil payload", TaintLabel.HOSTILE));
         SimplePerception sp = new SimplePerception();
-        var obs = sp.perceive(c);
-        assertFalse(obs.observations().isEmpty());
-        assertEquals(TrustTier.UNTRUSTED, obs.observations().get(0).trustTier(),
+        Observations obs = sp.perceive(c);
+        List<Observation> items = obs.items();
+        assertFalse(items.isEmpty());
+        assertEquals(TrustTier.UNTRUSTED, items.get(0).trustTier(),
                 "PE-1: HOSTILE taint must map to TrustTier.UNTRUSTED");
     }
 
@@ -239,9 +244,10 @@ class DefectRegressionTest {
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(entry("e1", "external data", TaintLabel.EXTERNAL));
         SimplePerception sp = new SimplePerception();
-        var obs = sp.perceive(c);
-        assertFalse(obs.observations().isEmpty());
-        assertEquals(TrustTier.LOW, obs.observations().get(0).trustTier(),
+        Observations obs = sp.perceive(c);
+        List<Observation> items = obs.items();
+        assertFalse(items.isEmpty());
+        assertEquals(TrustTier.LOW, items.get(0).trustTier(),
                 "PE-1: EXTERNAL taint must map to TrustTier.LOW");
     }
 
@@ -250,9 +256,10 @@ class DefectRegressionTest {
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(entry("c1", "clean data", TaintLabel.CLEAN));
         SimplePerception sp = new SimplePerception();
-        var obs = sp.perceive(c);
-        assertFalse(obs.observations().isEmpty());
-        assertEquals(TrustTier.HIGH, obs.observations().get(0).trustTier(),
+        Observations obs = sp.perceive(c);
+        List<Observation> items = obs.items();
+        assertFalse(items.isEmpty());
+        assertEquals(TrustTier.HIGH, items.get(0).trustTier(),
                 "PE-1: CLEAN taint must map to TrustTier.HIGH");
     }
 
@@ -266,7 +273,6 @@ class DefectRegressionTest {
         SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
-                new PassThroughToolMiddleware(),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
@@ -282,9 +288,8 @@ class DefectRegressionTest {
         TenantPolicyEngine policyEngine = new TenantPolicyEngine();
         SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
 
-        ToolContract slow = ToolContract.readOnly("slow", Map.of());
         SimpleToolRegistry registry = new SimpleToolRegistry();
-        registry.register("slow", slow, inv -> {
+        registry.register(readOnly("slow"), inv -> {
             Thread.sleep(50);
             return new ToolResult("done", List.of(), 1,
                     BigDecimal.ZERO, Duration.ofMillis(50), 0);
@@ -292,17 +297,13 @@ class DefectRegressionTest {
 
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
-                new PassThroughToolMiddleware(),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
 
-        List<ToolCall> calls = new ArrayList<>();
-        for (int i = 0; i < 3; i++)
-            calls.add(new ToolCall(UUID.randomUUID().toString(), "slow", Map.of(), false));
         ParallelToolCalls parallel = new ParallelToolCalls(
-                UUID.randomUUID().toString(), calls,
-                Duration.ofMillis(200), false);
+                List.of(tc("slow"), tc("slow"), tc("slow")),
+                false, Duration.ofMillis(200));
 
         long start = System.currentTimeMillis();
         ActionResult result = action.execute(parallel, c);

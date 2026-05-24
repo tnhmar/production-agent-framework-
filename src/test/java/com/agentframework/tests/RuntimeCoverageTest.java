@@ -53,6 +53,9 @@ public class RuntimeCoverageTest {
         return new AgentRuntime(new PassThroughPlanValidator());
     }
 
+    // A reusable suggested-decision for NeedsCorrection
+    private static final Decision RETRY_DECISION = new FinalAnswer("retry", List.of());
+
     // ─────────────────────────────────────────────────────────────────
     // NeedsCorrection => revision budget exhausted => PlanIncoherent
     // ─────────────────────────────────────────────────────────────────
@@ -62,7 +65,8 @@ public class RuntimeCoverageTest {
         PlanValidator alwaysNeedsCorrection = new PlanValidator() {
             @Override
             public ValidationResult validate(Decision d, ExecutionContext ctx) {
-                return new ValidationResult.NeedsCorrection("always wrong", List.of());
+                // NeedsCorrection(String reason, Decision suggestedDecision)
+                return new ValidationResult.NeedsCorrection("always wrong", RETRY_DECISION);
             }
             @Override
             public ValidationResult validateAfterAction(ActionResult r, ExecutionContext ctx) {
@@ -90,6 +94,7 @@ public class RuntimeCoverageTest {
         PlanValidator alwaysFails = new PlanValidator() {
             @Override
             public ValidationResult validate(Decision d, ExecutionContext ctx) {
+                // Failed(String reason, List<String> details)
                 return new ValidationResult.Failed("hard fail", List.of());
             }
             @Override
@@ -214,13 +219,11 @@ public class RuntimeCoverageTest {
             @Override
             public ValidationResult validateAfterAction(ActionResult r, ExecutionContext ctx) {
                 validateAfterActionCalls.incrementAndGet();
-                // Return Passed so the run can eventually complete normally
                 return new ValidationResult.Passed();
             }
         };
 
         SimpleToolRegistry reg = new SimpleToolRegistry();
-        // ToolResult.write() triggers indicatesWorldChange() == true
         reg.register(ToolContract.readOnly("change", "1.0", "write tool"),
                 (args, ctx) -> ToolResult.write("state changed"));
 

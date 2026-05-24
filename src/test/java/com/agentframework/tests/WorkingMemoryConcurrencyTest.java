@@ -13,6 +13,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Exhaustive concurrency and branch coverage for DefaultWorkingMemory.
+ *
+ * Note: Origin enum values are USER, TOOL, SYSTEM, MEMORY, RETRIEVAL.
+ * There is no Origin.AGENT — tests use Origin.SYSTEM instead.
  */
 class WorkingMemoryConcurrencyTest {
 
@@ -128,7 +131,8 @@ class WorkingMemoryConcurrencyTest {
         wm.add(entry("s1", WorkingMemoryTier.ACTIVE, 0.5, Origin.SYSTEM, TaintLabel.CLEAN));
         assertEquals(1, wm.getByOrigin(Origin.USER).size());
         assertEquals(1, wm.getByOrigin(Origin.TOOL).size());
-        assertEquals(0, wm.getByOrigin(Origin.AGENT).size());
+        // Origin.MEMORY is valid but no entries were added for it
+        assertEquals(0, wm.getByOrigin(Origin.MEMORY).size());
     }
 
     // ── markProcessed / isProcessed / getUnprocessed ─────────────────────────
@@ -182,5 +186,17 @@ class WorkingMemoryConcurrencyTest {
         wm.evictLowestRelevance(1);
         assertTrue(wm.getAll().stream().noneMatch(e -> e.id().equals("a")),
                 "ARCHIVED must be evicted before SECONDARY");
+    }
+
+    // ── All Origin values are valid ───────────────────────────────────────────
+
+    @Test
+    void origin_allValidValues() {
+        // Verify the known enum values exist — no AGENT
+        EnumSet<Origin> expected = EnumSet.of(
+                Origin.USER, Origin.TOOL, Origin.SYSTEM,
+                Origin.MEMORY, Origin.RETRIEVAL);
+        assertEquals(expected.size(), Origin.values().length,
+                "Origin enum must have exactly USER, TOOL, SYSTEM, MEMORY, RETRIEVAL");
     }
 }

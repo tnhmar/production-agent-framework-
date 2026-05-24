@@ -90,43 +90,35 @@ class AsyncRuntimeCoverageTest {
     }
 
     // ── AutoApprovalService / AutoRejectService ──────────────────────────────
-    //
-    // ApprovalPacket is a large record; we call it via its full canonical constructor.
-    // Signature (from compiler error):
-    //   String jobId, String runId, String tenantId, int cycle,
-    //   String toolName, Map<String,Object> arguments,
-    //   String reasoningTrace, Map<String,Object> context,
-    //   RiskClassification risk, String justification,
-    //   Instant requestedAt, Duration timeout
 
     private static ApprovalPacket packet(RiskClassification risk) {
         return new ApprovalPacket(
-                UUID.randomUUID().toString(),   // jobId
-                UUID.randomUUID().toString(),   // runId
-                "tenant",                       // tenantId
-                1,                              // cycle
-                "echo",                         // toolName
-                Map.of(),                       // arguments
-                null,                           // reasoningTrace
-                Map.of(),                       // context
-                risk,                           // risk
-                null,                           // justification
-                java.time.Instant.now(),        // requestedAt
-                Duration.ofMinutes(5)           // timeout
+                UUID.randomUUID().toString(),
+                UUID.randomUUID().toString(),
+                "tenant",
+                1,
+                "echo",
+                Map.of(),
+                null,
+                Map.of(),
+                risk,
+                null,
+                java.time.Instant.now(),
+                Duration.ofMinutes(5)
         );
     }
 
     @Test
     void autoApprovalService_alwaysApproves() {
         AutoApprovalService svc = new AutoApprovalService();
-        ApprovalDecision d = svc.decide(packet(RiskClassification.LOW));
+        ApprovalDecision d = svc.awaitDecision(packet(RiskClassification.LOW));
         assertInstanceOf(ApprovalDecision.Approved.class, d);
     }
 
     @Test
     void autoRejectService_alwaysRejects() {
         AutoRejectService svc = new AutoRejectService();
-        ApprovalDecision d = svc.decide(packet(RiskClassification.HIGH));
+        ApprovalDecision d = svc.awaitDecision(packet(RiskClassification.HIGH));
         assertInstanceOf(ApprovalDecision.Rejected.class, d);
     }
 

@@ -14,12 +14,13 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Deep coverage of SecurityEnforcer.
  *
- * Actual record signatures:
- *   ToolCall(String toolName, Map<String,Object> arguments, String reasoningTrace)
- *   ToolContract.readOnly(String name, String version, String description)
- *   ToolContract.irreversible(String name, String version, String description)
- *   TenantPolicy — no noIrreversible() factory found; use allowIrreversible(false) or similar
- *     → fall back to TenantPolicy constructor that disallows irreversible
+ * Production API notes:
+ *   TenantPolicy.restricted(tenantId, Set.of())  — disallows irreversible
+ *   TenantPolicy.permissive(tenantId)             — allows all
+ *   TaintTracker.label(id, TaintLabel)            — add taint
+ *   TaintTracker.isHostile(id)                    — check hostile
+ *   TaintTracker.clear(id)                        — remove by id
+ *   TrustBoundary is a class, not an enum → use TrustTier.values()
  */
 class SecurityEnforcerCoverageTest {
 
@@ -71,7 +72,7 @@ class SecurityEnforcerCoverageTest {
     @Test
     void enforce_blocksIrreversibleWhenTenantDisallows() {
         TenantPolicyEngine engine = new TenantPolicyEngine();
-        engine.put("strict", TenantPolicy.withIrreversibleDisallowed());
+        engine.put("strict", TenantPolicy.restricted("strict", Set.of()));
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
         DefaultExecutionContext c = ctx("strict");
         assertFalse(se.validate(tc("delete-all"), irreversible("delete-all"), c).isPassed(),
@@ -113,7 +114,7 @@ class SecurityEnforcerCoverageTest {
     @Test
     void validateParallel_blocksIrreversibleInBatchForStrictTenant() {
         TenantPolicyEngine engine = new TenantPolicyEngine();
-        engine.put("strict", TenantPolicy.withIrreversibleDisallowed());
+        engine.put("strict", TenantPolicy.restricted("strict", Set.of()));
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
         DefaultExecutionContext c = ctx("strict");
         ValidationVerdict v = se.validateParallel(
@@ -173,28 +174,85 @@ class SecurityEnforcerCoverageTest {
     }
 
     // ── TaintTracker ──────────────────────────────────────────────────────────
+    //
+    // API: label(id, TaintLabel), isHostile(id), clear(id)
 
     @Test
     void taintTracker_addAndHas() {
         TaintTracker tt = new TaintTracker();
-        assertFalse(tt.hasTaint("id1"));
-        tt.addTaint("id1", TaintLabel.HOSTILE);
-        assertTrue(tt.hasTaint("id1"));
+        assertFalse(tt.isHostile("id1"));
+        tt.label("id1", TaintLabel.HOSTILE);
+        assertTrue(tt.isHostile("id1"));
     }
 
     @Test
-    void taintTracker_clear() {
+    void taintTracker_clearById() {
         TaintTracker tt = new TaintTracker();
-        tt.addTaint("id1", TaintLabel.HOSTILE);
-        tt.clear();
-        assertFalse(tt.hasTaint("id1"));
+        tt.label("id1", TaintLabel.HOSTILE);
+        tt.clear("id1");
+        assertFalse(tt.isHostile("id1"));
+    }
+
+    @Test
+    void taintTracker_getReturnsLabel() {
+        TaintTracker tt = new TaintTracker();
+        assertEquals(TaintLabel.CLEAN, tt.get("unknown"));
+        tt.label("x", TaintLabel.EXTERNAL);
+        assertEquals(TaintLabel.EXTERNAL, tt.get("x"));
+    }
+
+    @Test
+    void taintTracker_isExternal() {
+        TaintTracker tt = new TaintTracker();
+        assertFalse(tt.isExternal("x"));
+        tt.label("x", TaintLabel.EXTERNAL);
+        assertTrue(tt.isExternal("x"));
+    }
+
+    @Test
+    void taintTracker_propagate() {
+        TaintTracker tt = new TaintTracker();
+        tt.label("src1", TaintLabel.HOSTILE);
+        tt.label("src2", TaintLabel.CLEAN);
+        tt.propagate("derived", List.of("src1", "src2"));
+        assertEquals(TaintLabel.HOSTILE, tt.get("derived"),
+                "propagate must inherit max taint from sources");
     }
 
     // ── TrustBoundary ────────────────────────────────────────────────────────
+    //
+    // TrustBoundary is a class (not an enum). Test its permits() behaviour.
+    // Use TrustTier.values() to iterate tiers.
 
     @Test
-    void trustBoundary_allTiersRepresented() {
-        assertTrue(TrustBoundary.values().length >= 3,
-                "TrustBoundary must have at least INTERNAL, PARTNER, EXTERNAL");
+    void trustBoundary_highMinimumOnlyPermitsHigh() {
+        TrustBoundary tb = new TrustBoundary("secure", TrustTier.HIGH, Set.of());
+        assertTrue(tb.permits(TrustTier.HIGH, "any"));
+        assertFalse(tb.permits(TrustTier.MEDIUM, "any"));
+        assertFalse(tb.permits(TrustTier.LOW, "any"));
+        assertFalse(tb.permits(TrustTier.UNTRUSTED, "any"));
+    }
+
+    @Test
+    void trustBoundary_untrustedMinimumPermitsAll() {
+        TrustBoundary tb = new TrustBoundary("open", TrustTier.UNTRUSTED, Set.of());
+        for (TrustTier tier : TrustTier.values()) {
+            assertTrue(tb.permits(tier, "origin"),
+                    "UNTRUSTED minimum must permit all tiers, failed for: " + tier);
+        }
+    }
+
+    @Test
+    void trustBoundary_allowedOriginFiltering() {
+        TrustBoundary tb = new TrustBoundary("filtered", TrustTier.LOW,
+                Set.of("allowed-origin"));
+        assertTrue(tb.permits(TrustTier.HIGH, "allowed-origin"));
+        assertFalse(tb.permits(TrustTier.HIGH, "other-origin"));
+    }
+
+    @Test
+    void trustTier_allValuesPresent() {
+        assertTrue(TrustTier.values().length >= 3,
+                "TrustTier must have at least HIGH, MEDIUM, LOW, UNTRUSTED");
     }
 }

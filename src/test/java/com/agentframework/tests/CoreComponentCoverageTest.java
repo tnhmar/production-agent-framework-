@@ -14,15 +14,12 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Covers core components that had thin or zero explicit tests.
  *
- * Actual record signatures (from compiler errors + source inspection):
- *   ToolCall(String toolName, Map<String,Object> arguments, String reasoningTrace)
- *   AskClarification(String question)  -- 1 field
- *   Budget(int maxCycles, int maxTokens, Duration maxDuration, BigDecimal maxCost)
- *   ValidationResult.Failed(String reason, List<String> violations)
- *   ValidationResult.NeedsCorrection(String reason, Decision suggestedRevision)
- *   DefaultLivenessDetector.checkStagnation(String,String,Decision,ExecutionContext)
- *   DefaultLivenessDetector.checkStuck(String,String,Decision,ExecutionContext)
- *   DefaultBeliefState has no getBySubject() — replaced with all(minConf) filter
+ * Production API notes:
+ *   DefaultLivenessDetector.checkStagnation(String preHash, String postHash, Decision, ExecutionContext)
+ *   DefaultLivenessDetector.checkStuck(Decision, ExecutionContext) — 2 args
+ *   FinalAnswer(String content, List<Citation> citations) — 2 args
+ *   checkStagnation returns Optional<TerminationReason>
+ *   checkStuck     returns Optional<TerminationReason>
  */
 class CoreComponentCoverageTest {
 
@@ -143,20 +140,32 @@ class CoreComponentCoverageTest {
 
     // ── DefaultLivenessDetector ──────────────────────────────────────────────
     //
-    // Real signature from compiler error:
-    //   checkStagnation(String runId, String goalId, Decision decision, ExecutionContext ctx)
-    //   checkStuck(String runId, String goalId, Decision decision, ExecutionContext ctx)
+    // checkStagnation(String preHash, String postHash, Decision, ExecutionContext) → Optional<TerminationReason>
+    // checkStuck(Decision, ExecutionContext)                                       → Optional<TerminationReason>
 
     @Test
     void livenessDetector_stagnationAfterThreshold() {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(2, 5);
         DefaultExecutionContext c = ctx();
-        FinalAnswer fa = new FinalAnswer("done");
-        assertFalse(ld.checkStagnation(c.runId(), "root", fa, c));
-        ld.checkStagnation(c.runId(), "root", fa, c);
-        ld.checkStagnation(c.runId(), "root", fa, c);
-        assertTrue(ld.checkStagnation(c.runId(), "root", fa, c),
+        FinalAnswer fa = new FinalAnswer("done", List.of());
+        String hash = DefaultLivenessDetector.hashGoalState(c.goalStack().all());
+        assertFalse(ld.checkStagnation(hash, hash, fa, c).isPresent());
+        ld.checkStagnation(hash, hash, fa, c);
+        ld.checkStagnation(hash, hash, fa, c);
+        assertTrue(ld.checkStagnation(hash, hash, fa, c).isPresent(),
                 "Liveness: stagnation must trigger after threshold");
+    }
+
+    @Test
+    void livenessDetector_stagnationNoTriggerWhenHashChanges() {
+        DefaultLivenessDetector ld = new DefaultLivenessDetector(2, 5);
+        DefaultExecutionContext c = ctx();
+        FinalAnswer fa = new FinalAnswer("done", List.of());
+        String h1 = "aaa";
+        String h2 = "bbb";
+        ld.checkStagnation(h1, h1, fa, c);
+        assertFalse(ld.checkStagnation(h1, h2, fa, c).isPresent(),
+                "Liveness: stagnation counter must reset when hash changes");
     }
 
     @Test
@@ -164,10 +173,10 @@ class CoreComponentCoverageTest {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(5, 2);
         DefaultExecutionContext c = ctx();
         AskClarification ask = new AskClarification("q");
-        ld.checkStuck(c.runId(), "root", ask, c);
-        ld.checkStuck(c.runId(), "root", ask, c);
-        ld.checkStuck(c.runId(), "root", ask, c);
-        assertTrue(ld.checkStuck(c.runId(), "root", ask, c),
+        ld.checkStuck(ask, c);
+        ld.checkStuck(ask, c);
+        ld.checkStuck(ask, c);
+        assertTrue(ld.checkStuck(ask, c).isPresent(),
                 "Liveness: stuck must trigger after threshold");
     }
 
@@ -176,11 +185,11 @@ class CoreComponentCoverageTest {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(5, 2);
         DefaultExecutionContext c = ctx();
         AskClarification ask = new AskClarification("q");
-        ld.checkStuck(c.runId(), "root", ask, c);
-        ld.checkStuck(c.runId(), "root", ask, c);
+        ld.checkStuck(ask, c);
+        ld.checkStuck(ask, c);
         ToolCall tc = new ToolCall("echo", Map.of(), null);
-        ld.checkStuck(c.runId(), "root", tc, c);
-        assertFalse(ld.checkStuck(c.runId(), "root", ask, c));
+        ld.checkStuck(tc, c);
+        assertFalse(ld.checkStuck(ask, c).isPresent());
     }
 
     // ── ContextWindowManager ─────────────────────────────────────────────────
@@ -213,10 +222,6 @@ class CoreComponentCoverageTest {
     }
 
     // ── ValidationResult ─────────────────────────────────────────────────────
-    //
-    // Real signatures:
-    //   ValidationResult.Failed(String reason, List<String> violations)
-    //   ValidationResult.NeedsCorrection(String reason, Decision suggestedRevision)
 
     @Test
     void validationResult_allPermits() {
@@ -224,7 +229,7 @@ class CoreComponentCoverageTest {
         ValidationResult failed = new ValidationResult.Failed(
                 "reason", List.of("v1", "v2"));
         ValidationResult needs = new ValidationResult.NeedsCorrection(
-                "fix this", new FinalAnswer("try again"));
+                "fix this", new FinalAnswer("try again", List.of()));
         assertInstanceOf(ValidationResult.Passed.class, passed);
         assertEquals("reason",   ((ValidationResult.Failed) failed).reason());
         assertEquals("fix this", ((ValidationResult.NeedsCorrection) needs).reason());
@@ -285,8 +290,6 @@ class CoreComponentCoverageTest {
     }
 
     // ── Budget ────────────────────────────────────────────────────────────────
-    //
-    // Real signature: Budget(int maxCycles, int maxTokens, Duration maxDuration, BigDecimal maxCost)
 
     @Test
     void budget_accessors() {

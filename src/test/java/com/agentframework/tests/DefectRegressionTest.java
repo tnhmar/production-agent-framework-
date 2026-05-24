@@ -21,6 +21,11 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Regression tests for defects fixed in the 2026-05-24 patch:
  * DA-1, WM-1, RV-1, N-EC-1, GS-1, PE-1, AAR-2.
+ *
+ * DefaultAction.withDefaultValidators signature:
+ *   withDefaultValidators(ToolRegistry, ToolMiddleware, ToolDispatcher,
+ *                         SecurityEnforcer, EventSink)
+ * A no-op ToolMiddleware lambda is used: (inv, next) -> next.apply(inv)
  */
 class DefectRegressionTest {
 
@@ -37,17 +42,14 @@ class DefectRegressionTest {
                 Origin.TOOL, 0.8, Instant.now(), taint);
     }
 
-    /** Creates a ToolCall with no reasoningTrace. */
     private static ToolCall tc(String toolName) {
         return new ToolCall(toolName, Map.of(), null);
     }
 
-    /** Creates a ToolContract using the 3-arg readOnly factory. */
     private static ToolContract readOnly(String name) {
         return ToolContract.readOnly(name, name, name + "-desc");
     }
 
-    /** Creates a ToolContract using the 3-arg irreversible factory. */
     private static ToolContract irreversible(String name) {
         return ToolContract.irreversible(name, name, name + "-desc");
     }
@@ -70,6 +72,7 @@ class DefectRegressionTest {
 
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
+                (inv, next) -> next.apply(inv),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
@@ -98,6 +101,7 @@ class DefectRegressionTest {
 
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
+                (inv, next) -> next.apply(inv),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
@@ -273,6 +277,7 @@ class DefectRegressionTest {
         SecurityEnforcer se = new SecurityEnforcer(tracker, policyEngine);
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
+                (inv, next) -> next.apply(inv),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
@@ -297,6 +302,7 @@ class DefectRegressionTest {
 
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
+                (inv, next) -> next.apply(inv),
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());

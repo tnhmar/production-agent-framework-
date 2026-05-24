@@ -26,7 +26,9 @@ import static org.junit.jupiter.api.Assertions.*;
  * DefaultAction.withDefaultValidators signature:
  *   withDefaultValidators(ToolRegistry, ToolMiddleware, ToolDispatcher,
  *                         SecurityEnforcer, EventSink)
- * Use ToolMiddleware.identity() for the no-op middleware.
+ *
+ * ToolHandler functional interface:
+ *   ToolResult execute(Map<String,Object> arguments, ExecutionContext ctx)
  */
 class DefectRegressionTest {
 
@@ -76,7 +78,7 @@ class DefectRegressionTest {
                 new TaintTracker(), new TenantPolicyEngine());
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("echo"),
-                inv -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
+                (args, ctx2) -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
         DefaultAction action = buildAction(registry, se);
@@ -97,7 +99,7 @@ class DefectRegressionTest {
                 new TaintTracker(), new TenantPolicyEngine());
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("echo"),
-                inv -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
+                (args, ctx2) -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
         DefaultAction action = buildAction(registry, se);
@@ -282,7 +284,7 @@ class DefectRegressionTest {
                 new TaintTracker(), new TenantPolicyEngine());
 
         SimpleToolRegistry registry = new SimpleToolRegistry();
-        registry.register(readOnly("slow"), inv -> {
+        registry.register(readOnly("slow"), (args, ctx2) -> {
             Thread.sleep(50);
             return new ToolResult("done", List.of(), 1,
                     BigDecimal.ZERO, Duration.ofMillis(50), 0);

@@ -28,7 +28,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *   - All DefaultAction instances used in try-with-resources to prevent executor leak.
  *   - Concurrency tests annotated with @Timeout to prevent CI hang on deadlock.
  *   - DA-3 uses @Timeout instead of wall-clock elapsed assertion (avoids flakiness).
- *   - ToolHandler lambda signature: (args, _) when ctx is unused (Java 21 unnamed var).
+ *   - ToolHandler lambda: (args, ignored) when ExecutionContext is not used.
+ *     NOTE: unnamed variable _ requires --enable-preview in Java 21; use ignored instead.
  */
 class DefectRegressionTest {
 
@@ -78,7 +79,7 @@ class DefectRegressionTest {
                 new TaintTracker(), new TenantPolicyEngine());
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("echo"),
-                (args, _) -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
+                (args, ignored) -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
         try (DefaultAction action = buildAction(registry, se)) {
@@ -98,7 +99,7 @@ class DefectRegressionTest {
                 new TaintTracker(), new TenantPolicyEngine());
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("echo"),
-                (args, _) -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
+                (args, ignored) -> new ToolResult("ok", List.of(), 1, BigDecimal.ZERO,
                         Duration.ofMillis(1), 0));
 
         try (DefaultAction action = buildAction(registry, se)) {
@@ -292,7 +293,7 @@ class DefectRegressionTest {
                 new TaintTracker(), new TenantPolicyEngine());
 
         SimpleToolRegistry registry = new SimpleToolRegistry();
-        registry.register(readOnly("slow"), (args, _) -> {
+        registry.register(readOnly("slow"), (args, ignored) -> {
             try {
                 Thread.sleep(50);
             } catch (InterruptedException e) {

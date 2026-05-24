@@ -28,7 +28,8 @@ import static org.junit.jupiter.api.Assertions.*;
  *                         SecurityEnforcer, EventSink)
  *
  * ToolHandler functional interface:
- *   ToolResult execute(Map<String,Object> arguments, ExecutionContext ctx)
+ *   ToolResult execute(Map<String,Object> arguments, ExecutionContext ctx) throws ToolException
+ *   Note: InterruptedException is NOT declared — must be caught inside the lambda.
  */
 class DefectRegressionTest {
 
@@ -285,7 +286,11 @@ class DefectRegressionTest {
 
         SimpleToolRegistry registry = new SimpleToolRegistry();
         registry.register(readOnly("slow"), (args, ctx2) -> {
-            Thread.sleep(50);
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             return new ToolResult("done", List.of(), 1,
                     BigDecimal.ZERO, Duration.ofMillis(50), 0);
         });

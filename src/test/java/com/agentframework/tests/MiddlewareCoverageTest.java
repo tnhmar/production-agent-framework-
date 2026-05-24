@@ -874,7 +874,7 @@ public class MiddlewareCoverageTest {
     void semanticValidator_completedGoal_blocksToolCall() {
         SemanticActionValidator v = new SemanticActionValidator();
         DefaultExecutionContext ctx = ctx();
-        ctx.goalStack().push(new Goal("g1", "finish task", GoalStatus.COMPLETED, List.of()));
+        ctx.goalStack().push(new Goal("g1", null, GoalStatus.COMPLETED, "finish task", List.of(), null));
         ToolContract contract = ToolContract.readOnly("t", "1.0", "d");
         ValidationVerdict verdict = v.validate(new ToolCall("t", Map.of(), ""), contract, ctx);
         assertFalse(verdict.isPassed(), "completed goal blocks new tool calls");
@@ -885,7 +885,7 @@ public class MiddlewareCoverageTest {
     void semanticValidator_failedGoal_blocksToolCall() {
         SemanticActionValidator v = new SemanticActionValidator();
         DefaultExecutionContext ctx = ctx();
-        ctx.goalStack().push(new Goal("g1", "do work", GoalStatus.FAILED, List.of()));
+        ctx.goalStack().push(new Goal("g1", null, GoalStatus.FAILED, "do work", List.of(), null));
         ToolContract contract = ToolContract.readOnly("t", "1.0", "d");
         ValidationVerdict verdict = v.validate(new ToolCall("t", Map.of(), ""), contract, ctx);
         assertFalse(verdict.isPassed(), "failed goal blocks new tool calls");
@@ -896,7 +896,7 @@ public class MiddlewareCoverageTest {
     void semanticValidator_irreversibleOnPendingAtCycle0_blocked() {
         SemanticActionValidator v = new SemanticActionValidator();
         DefaultExecutionContext ctx = ctx(); // cycleCount == 0
-        ctx.goalStack().push(new Goal("g1", "do work", GoalStatus.PENDING, List.of()));
+        ctx.goalStack().push(new Goal("g1", null, GoalStatus.PENDING, "do work", List.of(), null));
         ToolContract contract = ToolContract.irreversible("destroy", "1.0", "irreversible");
         ValidationVerdict verdict = v.validate(
             new ToolCall("destroy", Map.of(), ""), contract, ctx);
@@ -908,7 +908,7 @@ public class MiddlewareCoverageTest {
     void semanticValidator_irreversibleOnPendingAfterCycle0_allowed() {
         SemanticActionValidator v = new SemanticActionValidator();
         DefaultExecutionContext ctx = ctx();
-        ctx.goalStack().push(new Goal("g1", "do work", GoalStatus.PENDING, List.of()));
+        ctx.goalStack().push(new Goal("g1", null, GoalStatus.PENDING, "do work", List.of(), null));
         ctx.incrementCycle(); // cycleCount == 1
         ToolContract contract = ToolContract.irreversible("destroy", "1.0", "irreversible");
         ValidationVerdict verdict = v.validate(
@@ -917,14 +917,14 @@ public class MiddlewareCoverageTest {
     }
 
     @Test
-    void semanticValidator_activeGoalInProgress_readOnly_passesThrough() {
+    void semanticValidator_activeGoal_readOnly_passesThrough() {
         SemanticActionValidator v = new SemanticActionValidator();
         DefaultExecutionContext ctx = ctx();
-        ctx.goalStack().push(new Goal("g1", "in progress", GoalStatus.IN_PROGRESS, List.of()));
+        ctx.goalStack().push(new Goal("g1", null, GoalStatus.ACTIVE, "in progress", List.of(), null));
         ToolContract contract = ToolContract.readOnly("search", "1.0", "search");
         ValidationVerdict verdict = v.validate(
             new ToolCall("search", Map.of(), ""), contract, ctx);
-        assertTrue(verdict.isPassed(), "read-only on IN_PROGRESS goal passes");
+        assertTrue(verdict.isPassed(), "read-only on ACTIVE goal passes");
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -1030,7 +1030,7 @@ public class MiddlewareCoverageTest {
 
         assertFalse(verdict.isPassed(), "call blocked when argument references hostile id");
         assertEquals(1, events.size(), "BLOCK event emitted");
-        assertEquals("BLOCK", events.get(0).metadata().get("severity"));
+        assertEquals("BLOCK", events.get(0).attributes().get("severity"));
     }
 
     @Test
@@ -1048,7 +1048,7 @@ public class MiddlewareCoverageTest {
 
         assertTrue(verdict.isPassed(), "call passes when argument does not reference hostile id");
         assertEquals(1, events.size(), "WARN audit event emitted");
-        assertEquals("WARN", events.get(0).metadata().get("severity"));
+        assertEquals("WARN", events.get(0).attributes().get("severity"));
     }
 
     @Test

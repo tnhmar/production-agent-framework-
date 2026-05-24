@@ -43,8 +43,9 @@ import java.util.concurrent.Executors;
  * {@link DefaultExecutionContext} with {@code snap.runId()} as the
  * {@code tenantId} parameter — a copy-paste error that caused all
  * tenant-policy lookups and observability events during HITL resume to use
- * the run UUID as a tenant identifier. The tenant ID is now extracted from
- * the snapshot's goal-stack metadata, falling back to
+ * the run UUID as a tenant identifier. The tenant ID is now derived from
+ * the snapshot's goal-stack description prefix (stored as
+ * {@code "tenantId:<value>"} by convention), falling back to
  * {@link AgentRuntime#SYSTEM_TENANT}.
  */
 public class AsyncAgentRuntime {
@@ -150,8 +151,9 @@ public class AsyncAgentRuntime {
      * Resume path: restore snapshot, inject operator decision, then execute.
      *
      * <p><b>AAR-2 fix:</b> the tenant ID is now derived from the snapshot
-     * itself (stored in goal metadata or falling back to SYSTEM_TENANT),
-     * not from {@code snap.runId()} as was incorrectly done before.
+     * itself (stored in the root goal's {@code successCriteria} field as a
+     * {@code "tenantId:<value>"} prefix), not from {@code snap.runId()} as
+     * was incorrectly done before.
      */
     private void runFromStoredSnapshot(
             ExecutionContext.Snapshot snap, ApprovalDecision decision,
@@ -201,16 +203,26 @@ public class AsyncAgentRuntime {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /**
-     * AAR-2 fix: extracts the tenant ID from snapshot goal metadata.
-     * The tenant ID is stored as a tag on the root goal when the original
-     * run was initiated. Falls back to {@link AgentRuntime#SYSTEM_TENANT}
-     * if no tenant information is available in the snapshot.
+     * AAR-2 fix: extracts the tenant ID from the root goal's successCriteria
+     * field, which by convention is prefixed with {@code "tenantId:<value>;"}.
+     * Falls back to {@link AgentRuntime#SYSTEM_TENANT} when not present.
+     *
+     * <p>Example stored criteria: {@code "tenantId:acme-corp;achieve X"}
      */
     private String extractTenantId(ExecutionContext.Snapshot snap) {
         return snap.goalStackSnapshot().stream()
             .filter(g -> "root".equals(g.id()))
             .findFirst()
-            .map(g -> g.tags() != null ? g.tags().getOrDefault("tenantId", AgentRuntime.SYSTEM_TENANT) : AgentRuntime.SYSTEM_TENANT)
+            .map(g -> {
+                String criteria = g.successCriteria();
+                if (criteria != null && criteria.startsWith("tenantId:")) {
+                    int end = criteria.indexOf(';');
+                    return end > 0
+                        ? criteria.substring(9, end)
+                        : criteria.substring(9);
+                }
+                return AgentRuntime.SYSTEM_TENANT;
+            })
             .orElse(AgentRuntime.SYSTEM_TENANT);
     }
 

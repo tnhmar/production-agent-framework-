@@ -17,15 +17,15 @@ import static org.junit.jupiter.api.Assertions.*;
  *  - validateParallel: taint check, per-call policy, irreversible in batch
  *  - TaintClassifier: all pattern groups, null/blank inputs
  *  - TaintTracker: addTaint, hasTaint, clear
- *  - TrustBoundary: all tiers
+ *  - TrustBoundary: enum coverage
  */
 class SecurityEnforcerCoverageTest {
 
     private static DefaultExecutionContext ctx(String tenant) {
         Task t = Task.builder().instruction("x").maxCycles(5).maxTokens(4000).build();
         DefaultExecutionContext c = new DefaultExecutionContext(t, tenant, "u");
-        c.goalStack().push(Goal.builder().id("root").description("x")
-                .priority(1).status(GoalStatus.ACTIVE).build());
+        c.goalStack().push(
+            new Goal("root", null, GoalStatus.ACTIVE, "x", List.of(), null));
         return c;
     }
 
@@ -34,15 +34,14 @@ class SecurityEnforcerCoverageTest {
                 WorkingMemoryTier.ACTIVE, Origin.TOOL, 0.8, Instant.now(), taint);
     }
 
-    // ── SecurityEnforcer.validate (single call) ───────────────────────────────
+    // ── SecurityEnforcer.validate (single call) ──────────────────────────────
 
     @Test
     void enforce_passesCleanCall() {
         SecurityEnforcer se = new SecurityEnforcer(
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(),
-                "echo", Map.of(), false);
+        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false);
         ToolContract contract = ToolContract.readOnly("echo", Map.of());
         assertTrue(se.validate(tc, contract, c).isPassed());
     }
@@ -53,7 +52,6 @@ class SecurityEnforcerCoverageTest {
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(wmEntry(TaintLabel.HOSTILE));
-
         ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false);
         ToolContract contract = ToolContract.readOnly("echo", Map.of());
         assertFalse(se.validate(tc, contract, c).isPassed(),
@@ -65,10 +63,8 @@ class SecurityEnforcerCoverageTest {
         TenantPolicyEngine engine = new TenantPolicyEngine();
         engine.put("strict", TenantPolicy.noIrreversible());
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
-
         DefaultExecutionContext c = ctx("strict");
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(),
-                "delete-all", Map.of(), false);
+        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "delete-all", Map.of(), false);
         ToolContract contract = ToolContract.irreversible("delete-all", Map.of());
         assertFalse(se.validate(tc, contract, c).isPassed(),
                 "Must block irreversible action for no-irreversible tenant");
@@ -79,14 +75,13 @@ class SecurityEnforcerCoverageTest {
         SecurityEnforcer se = new SecurityEnforcer(
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(),
-                "delete", Map.of(), false);
+        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "delete", Map.of(), false);
         ToolContract contract = ToolContract.irreversible("delete", Map.of());
         assertTrue(se.validate(tc, contract, c).isPassed(),
                 "Default tenant must allow irreversible actions");
     }
 
-    // ── SecurityEnforcer.validateParallel ─────────────────────────────────────
+    // ── SecurityEnforcer.validateParallel ────────────────────────────────────
 
     @Test
     void validateParallel_blocksOnHostileTaint() {
@@ -94,12 +89,10 @@ class SecurityEnforcerCoverageTest {
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(wmEntry(TaintLabel.HOSTILE));
-
         List<ToolCall> calls = List.of(
-                new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
+            new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
         ToolContract contract = ToolContract.readOnly("echo", Map.of());
-        ValidationVerdict v = se.validateParallel(
-                calls, name -> contract, c);
+        ValidationVerdict v = se.validateParallel(calls, name -> contract, c);
         assertFalse(v.isPassed(), "validateParallel: must block when hostile taint");
     }
 
@@ -109,11 +102,10 @@ class SecurityEnforcerCoverageTest {
                 new TaintTracker(), new TenantPolicyEngine());
         DefaultExecutionContext c = ctx("t1");
         List<ToolCall> calls = List.of(
-                new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false),
-                new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
+            new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false),
+            new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
         ToolContract contract = ToolContract.readOnly("echo", Map.of());
-        ValidationVerdict v = se.validateParallel(
-                calls, name -> contract, c);
+        ValidationVerdict v = se.validateParallel(calls, name -> contract, c);
         assertTrue(v.isPassed(), "validateParallel: must pass clean batch");
     }
 
@@ -123,16 +115,15 @@ class SecurityEnforcerCoverageTest {
         engine.put("strict", TenantPolicy.noIrreversible());
         SecurityEnforcer se = new SecurityEnforcer(new TaintTracker(), engine);
         DefaultExecutionContext c = ctx("strict");
-
         List<ToolCall> calls = List.of(
-                new ToolCall(UUID.randomUUID().toString(), "del", Map.of(), false));
+            new ToolCall(UUID.randomUUID().toString(), "del", Map.of(), false));
         ToolContract contract = ToolContract.irreversible("del", Map.of());
         ValidationVerdict v = se.validateParallel(calls, name -> contract, c);
         assertFalse(v.isPassed(),
                 "validateParallel: must block irreversible in batch for strict tenant");
     }
 
-    // ── TaintClassifier ───────────────────────────────────────────────────────
+    // ── TaintClassifier ──────────────────────────────────────────────────────
 
     @Test
     void taintClassifier_nullAndBlankAreClean() {
@@ -159,8 +150,7 @@ class SecurityEnforcerCoverageTest {
     @Test
     void taintClassifier_detectsJailbreakToken() {
         TaintClassifier tc = new TaintClassifier();
-        assertEquals(TaintLabel.HOSTILE,
-                tc.classify("DAN mode enabled"));
+        assertEquals(TaintLabel.HOSTILE, tc.classify("DAN mode enabled"));
     }
 
     @Test
@@ -201,12 +191,11 @@ class SecurityEnforcerCoverageTest {
         assertFalse(tt.hasTaint("id1"));
     }
 
-    // ── TrustBoundary ─────────────────────────────────────────────────────────
+    // ── TrustBoundary ────────────────────────────────────────────────────────
 
     @Test
     void trustBoundary_allTiersRepresented() {
-        TrustBoundary[] tiers = TrustBoundary.values();
-        assertTrue(tiers.length >= 3,
+        assertTrue(TrustBoundary.values().length >= 3,
                 "TrustBoundary must have at least INTERNAL, PARTNER, EXTERNAL");
     }
 }

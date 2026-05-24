@@ -16,15 +16,15 @@ import static org.junit.jupiter.api.Assertions.*;
  *  - DefaultBeliefState: assertBelief, conflict resolution, retract, getBySubject
  *  - DefaultLivenessDetector: stagnation, stuck-state thresholds
  *  - ContextWindowManager: threshold guard, eviction, maxTokens<=0 guard
- *  - Goal: builder, withStatus, tags
+ *  - Goal: withStatus, withSuccessCriteria
  *  - Belief: record accessors
- *  - Budget value type
+ *  - Budget: value type
  *  - ValidationResult: all three permits
  *  - DefaultExecutionContext: snapshot round-trip and schema version
  */
 class CoreComponentCoverageTest {
 
-    // ── DefaultGoalStack ──────────────────────────────────────────────────────
+    // ── DefaultGoalStack ─────────────────────────────────────────────────────
 
     @Test
     void goalStack_pushCurrentDepthPop() {
@@ -55,11 +55,10 @@ class CoreComponentCoverageTest {
     @Test
     void goalStack_allActiveFiltersCorrectly() {
         DefaultGoalStack gs = new DefaultGoalStack();
-        gs.push(goal("root", GoalStatus.ACTIVE));
-        gs.push(goal("sub", GoalStatus.PENDING));
-        gs.push(goal("done", GoalStatus.COMPLETED));
-        List<Goal> active = gs.allActive();
-        assertEquals(2, active.size());
+        gs.push(goal("root",   GoalStatus.ACTIVE));
+        gs.push(goal("sub",    GoalStatus.PENDING));
+        gs.push(goal("done",   GoalStatus.COMPLETED));
+        assertEquals(2, gs.allActive().size());
     }
 
     @Test
@@ -83,7 +82,7 @@ class CoreComponentCoverageTest {
         assertEquals(2, gs.all().size());
     }
 
-    // ── DefaultBeliefState ────────────────────────────────────────────────────
+    // ── DefaultBeliefState ───────────────────────────────────────────────────
 
     @Test
     void beliefState_assertAndRetrieve() {
@@ -112,7 +111,8 @@ class CoreComponentCoverageTest {
     void beliefState_retract() {
         DefaultBeliefState bs = new DefaultBeliefState();
         String id = UUID.randomUUID().toString();
-        bs.assertBelief(new Belief(id, "x", "y", "z", 0.8, "s", Instant.now(), false));
+        bs.assertBelief(
+            new Belief(id, "x", "y", "z", 0.8, "s", Instant.now(), false));
         bs.retract(id);
         assertEquals(0, bs.all(0.0).size());
     }
@@ -120,47 +120,45 @@ class CoreComponentCoverageTest {
     @Test
     void beliefState_getBySubject() {
         DefaultBeliefState bs = new DefaultBeliefState();
-        bs.assertBelief(new Belief(UUID.randomUUID().toString(), "a", "p",
-                "v", 0.8, "s", Instant.now(), false));
-        bs.assertBelief(new Belief(UUID.randomUUID().toString(), "b", "p",
-                "v", 0.8, "s", Instant.now(), false));
+        bs.assertBelief(
+            new Belief(UUID.randomUUID().toString(), "a", "p", "v", 0.8, "s", Instant.now(), false));
+        bs.assertBelief(
+            new Belief(UUID.randomUUID().toString(), "b", "p", "v", 0.8, "s", Instant.now(), false));
         assertEquals(1, bs.getBySubject("a").size());
     }
 
     @Test
     void beliefState_allWithMinConfidenceFilter() {
         DefaultBeliefState bs = new DefaultBeliefState();
-        bs.assertBelief(new Belief(UUID.randomUUID().toString(), "a", "p",
-                "v", 0.3, "s", Instant.now(), false));
-        bs.assertBelief(new Belief(UUID.randomUUID().toString(), "b", "p",
-                "v", 0.9, "s", Instant.now(), false));
+        bs.assertBelief(
+            new Belief(UUID.randomUUID().toString(), "a", "p", "v", 0.3, "s", Instant.now(), false));
+        bs.assertBelief(
+            new Belief(UUID.randomUUID().toString(), "b", "p", "v", 0.9, "s", Instant.now(), false));
         assertEquals(1, bs.all(0.5).size());
     }
 
-    // ── DefaultLivenessDetector ───────────────────────────────────────────────
+    // ── DefaultLivenessDetector ──────────────────────────────────────────────
 
     @Test
     void livenessDetector_stagnationAfterThreshold() {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(2, 5);
         DefaultExecutionContext c = ctx();
-
-        // first tick — not stagnant
         assertFalse(ld.checkStagnation(c));
-        // same goal hash three times → stagnation
         ld.checkStagnation(c);
         ld.checkStagnation(c);
-        assertTrue(ld.checkStagnation(c), "Liveness: stagnation must trigger after threshold");
+        assertTrue(ld.checkStagnation(c),
+                "Liveness: stagnation must trigger after threshold");
     }
 
     @Test
     void livenessDetector_stuckAfterThreshold() {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(5, 2);
         DefaultExecutionContext c = ctx();
-        ld.checkStuck(c, new AskClarification(UUID.randomUUID().toString(), "q"));
-        ld.checkStuck(c, new AskClarification(UUID.randomUUID().toString(), "q"));
-        ld.checkStuck(c, new AskClarification(UUID.randomUUID().toString(), "q"));
-        assertTrue(ld.checkStuck(c,
-                new AskClarification(UUID.randomUUID().toString(), "q")),
+        AskClarification ask = new AskClarification(UUID.randomUUID().toString(), "q");
+        ld.checkStuck(c, ask);
+        ld.checkStuck(c, ask);
+        ld.checkStuck(c, ask);
+        assertTrue(ld.checkStuck(c, ask),
                 "Liveness: stuck must trigger after threshold");
     }
 
@@ -168,38 +166,30 @@ class CoreComponentCoverageTest {
     void livenessDetector_substantiveDecisionResetsStuck() {
         DefaultLivenessDetector ld = new DefaultLivenessDetector(5, 2);
         DefaultExecutionContext c = ctx();
-        ld.checkStuck(c, new AskClarification(UUID.randomUUID().toString(), "q"));
-        ld.checkStuck(c, new AskClarification(UUID.randomUUID().toString(), "q"));
-        // substantive decision resets
+        AskClarification ask = new AskClarification(UUID.randomUUID().toString(), "q");
+        ld.checkStuck(c, ask);
+        ld.checkStuck(c, ask);
         ld.checkStuck(c,
                 new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false));
-        assertFalse(ld.checkStuck(c,
-                new AskClarification(UUID.randomUUID().toString(), "q")));
+        assertFalse(ld.checkStuck(c, ask));
     }
 
-    // ── ContextWindowManager ──────────────────────────────────────────────────
+    // ── ContextWindowManager ─────────────────────────────────────────────────
 
     @Test
     void contextWindowManager_noEvictionBelowThreshold() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
-        // add 10 small entries
-        for (int i = 0; i < 10; i++) {
-            wm.add(wmEntry("e" + i, "hello world"));
-        }
+        for (int i = 0; i < 10; i++) wm.add(wmEntry("e" + i, "hello world"));
         int before = wm.size();
-        new ContextWindowManager().manage(wm, 100_000); // large limit — no eviction
+        new ContextWindowManager().manage(wm, 100_000);
         assertEquals(before, wm.size(), "CWM: no eviction below threshold");
     }
 
     @Test
     void contextWindowManager_evictsWhenOver70Percent() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
-        // each entry ≈ 25 tokens (100 chars / 4)
-        for (int i = 0; i < 100; i++) {
-            wm.add(wmEntry("e" + i, "a".repeat(100)));
-        }
+        for (int i = 0; i < 100; i++) wm.add(wmEntry("e" + i, "a".repeat(100)));
         int before = wm.size();
-        // maxTokens = 1000, 100 entries × 25 tokens = 2500 > 700 threshold → eviction
         new ContextWindowManager().manage(wm, 1000);
         assertTrue(wm.size() < before, "CWM: eviction must reduce working memory size");
     }
@@ -210,23 +200,22 @@ class CoreComponentCoverageTest {
         for (int i = 0; i < 5; i++) wm.add(wmEntry("e" + i, "hello"));
         int before = wm.size();
         new ContextWindowManager().manage(wm, 0);
-        assertEquals(before, wm.size(), "CWM: maxTokens=0 guard must skip eviction");
+        assertEquals(before, wm.size(), "CWM: maxTokens=0 must skip eviction");
     }
 
-    // ── ValidationResult: all three permits ──────────────────────────────────
+    // ── ValidationResult ─────────────────────────────────────────────────────
 
     @Test
     void validationResult_allPermits() {
-        ValidationResult passed  = new ValidationResult.Passed();
-        ValidationResult failed  = new ValidationResult.Failed("reason");
-        ValidationResult needs   = new ValidationResult.NeedsCorrection("fix this");
-
+        ValidationResult passed = new ValidationResult.Passed();
+        ValidationResult failed = new ValidationResult.Failed("reason");
+        ValidationResult needs  = new ValidationResult.NeedsCorrection("fix this");
         assertInstanceOf(ValidationResult.Passed.class, passed);
-        assertEquals("reason",    ((ValidationResult.Failed) failed).reason());
-        assertEquals("fix this",  ((ValidationResult.NeedsCorrection) needs).reason());
+        assertEquals("reason",   ((ValidationResult.Failed) failed).reason());
+        assertEquals("fix this", ((ValidationResult.NeedsCorrection) needs).reason());
     }
 
-    // ── DefaultExecutionContext: snapshot round-trip ──────────────────────────
+    // ── DefaultExecutionContext snapshot round-trip ──────────────────────────
 
     @Test
     void executionContext_snapshotRoundTrip() {
@@ -247,7 +236,6 @@ class CoreComponentCoverageTest {
         assertEquals(1, snap.stuckCycles());
         assertEquals(1, snap.revisionCount());
 
-        // restore into a fresh context
         DefaultExecutionContext c2 = ctx();
         c2.restoreFromSnapshot(snap);
         assertEquals(42, c2.totalTokensUsed());
@@ -255,38 +243,33 @@ class CoreComponentCoverageTest {
     }
 
     @Test
-    void executionContext_integrityHashDetectsTamper() {
+    void executionContext_integrityHashIsDeterministic() {
         DefaultExecutionContext c = ctx();
         ExecutionContext.Snapshot snap = c.checkpoint();
-        String original = snap.integrityHash();
-        // recompute — must match
-        String recomputed = DefaultExecutionContext.computeSnapshotHash(snap);
-        assertEquals(original, recomputed, "Integrity hash must be deterministic");
+        String h1 = snap.integrityHash();
+        String h2 = DefaultExecutionContext.computeSnapshotHash(snap);
+        assertEquals(h1, h2, "Integrity hash must be deterministic");
     }
 
-    // ── Goal: builder and withStatus ─────────────────────────────────────────
+    // ── Goal: withStatus and withSuccessCriteria ─────────────────────────────
 
     @Test
-    void goal_builderAndWithStatus() {
-        Goal g = Goal.builder().id("g1").description("do x").priority(5)
-                .status(GoalStatus.PENDING).build();
-        assertEquals("g1", g.id());
+    void goal_withStatus() {
+        Goal g = new Goal("g1", null, GoalStatus.PENDING, "do x", List.of(), null);
         assertEquals(GoalStatus.PENDING, g.status());
-
         Goal updated = g.withStatus(GoalStatus.COMPLETED);
         assertEquals(GoalStatus.COMPLETED, updated.status());
         assertEquals("g1", updated.id(), "withStatus must preserve id");
     }
 
     @Test
-    void goal_tagsAreOptional() {
-        Goal g = Goal.builder().id("g2").description("x").priority(1)
-                .status(GoalStatus.ACTIVE).build();
-        // tags may be null or empty — just must not throw
-        assertDoesNotThrow(g::tags);
+    void goal_withSuccessCriteria() {
+        Goal g = new Goal("g2", null, GoalStatus.ACTIVE, "x", List.of(), null);
+        Goal updated = g.withSuccessCriteria("done when Y");
+        assertEquals("done when Y", updated.successCriteria());
     }
 
-    // ── Budget ───────────────────────────────────────────────────────────────
+    // ── Budget ────────────────────────────────────────────────────────────────
 
     @Test
     void budget_accessors() {
@@ -299,7 +282,7 @@ class CoreComponentCoverageTest {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private static Goal goal(String id, GoalStatus status) {
-        return Goal.builder().id(id).description(id).priority(1).status(status).build();
+        return new Goal(id, null, status, id, List.of(), null);
     }
 
     private static WorkingMemoryEntry wmEntry(String id, String content) {
@@ -311,8 +294,8 @@ class CoreComponentCoverageTest {
     private static DefaultExecutionContext ctx() {
         Task t = Task.builder().instruction("test").maxCycles(10).maxTokens(4000).build();
         DefaultExecutionContext c = new DefaultExecutionContext(t, "tenant", "user");
-        c.goalStack().push(Goal.builder().id("root").description("root")
-                .priority(1).status(GoalStatus.ACTIVE).build());
+        c.goalStack().push(
+            new Goal("root", null, GoalStatus.ACTIVE, "root", List.of(), null));
         return c;
     }
 }

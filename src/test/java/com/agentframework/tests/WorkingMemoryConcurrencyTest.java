@@ -13,15 +13,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Exhaustive concurrency and branch coverage for DefaultWorkingMemory.
- * Targets WM-1 fix verification plus:
- *  - evictOldest: correct ordering and count
- *  - evictLowestRelevance: tier-aware order
- *  - compress: removes ids, adds COMPRESSED entry, cleans processed set
- *  - clear: empties both entries and processed set
- *  - getByOrigin
- *  - markProcessed / isProcessed / getUnprocessed
- *  - estimatedTokenCount
- *  - size
  */
 class WorkingMemoryConcurrencyTest {
 
@@ -31,7 +22,7 @@ class WorkingMemoryConcurrencyTest {
                 relevance, Instant.now(), taint);
     }
 
-    // ── WM-1 concurrency: add + evict simultaneously ──────────────────────────
+    // ── WM-1 stress ──────────────────────────────────────────────────────────
 
     @Test
     void wm1_stressAddAndEvictOldest() throws Exception {
@@ -60,23 +51,23 @@ class WorkingMemoryConcurrencyTest {
         for (Future<?> f : futures) f.get(15, TimeUnit.SECONDS);
         pool.shutdown();
         assertEquals(0, errors.get(),
-                "WM-1 stress: zero exceptions under concurrent add+evictOldest+evictLowestRelevance");
+                "WM-1 stress: zero exceptions under concurrent add+evict");
     }
 
-    // ── evictOldest: removes the N oldest by timestamp ────────────────────────
+    // ── evictOldest ──────────────────────────────────────────────────────────
 
     @Test
     void evictOldest_removesNOldest() throws Exception {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
         for (int i = 0; i < 5; i++) {
-            Thread.sleep(1); // ensure distinct timestamps
+            Thread.sleep(1);
             wm.add(entry("e" + i, WorkingMemoryTier.ACTIVE, 0.5, Origin.TOOL, TaintLabel.CLEAN));
         }
         wm.evictOldest(2);
         assertEquals(3, wm.size());
     }
 
-    // ── evictLowestRelevance: tier-aware priority ──────────────────────────────
+    // ── evictLowestRelevance: tier-aware ─────────────────────────────────────
 
     @Test
     void evictLowestRelevance_archiveEvictedFirst() {
@@ -85,13 +76,12 @@ class WorkingMemoryConcurrencyTest {
         wm.add(entry("archived", WorkingMemoryTier.ARCHIVED,  0.9, Origin.TOOL, TaintLabel.CLEAN));
         wm.add(entry("bg",       WorkingMemoryTier.BACKGROUND,0.9, Origin.TOOL, TaintLabel.CLEAN));
         wm.evictLowestRelevance(1);
-        // archived must be gone
         assertTrue(wm.getAll().stream().noneMatch(e -> e.id().equals("archived")),
                 "ARCHIVED entry must be evicted first");
     }
 
     @Test
-    void evictLowestRelevance_withinSameTierLowestRelevanceFirst() {
+    void evictLowestRelevance_withinSameTierLowestFirst() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
         wm.add(entry("low",  WorkingMemoryTier.ACTIVE, 0.1, Origin.TOOL, TaintLabel.CLEAN));
         wm.add(entry("high", WorkingMemoryTier.ACTIVE, 0.9, Origin.TOOL, TaintLabel.CLEAN));
@@ -100,7 +90,7 @@ class WorkingMemoryConcurrencyTest {
                 "Lowest relevance entry must be evicted first within same tier");
     }
 
-    // ── compress ──────────────────────────────────────────────────────────────
+    // ── compress ─────────────────────────────────────────────────────────────
 
     @Test
     void compress_replacesEntriesWithSummary() {
@@ -109,14 +99,14 @@ class WorkingMemoryConcurrencyTest {
         wm.add(entry("b", WorkingMemoryTier.ACTIVE, 0.5, Origin.TOOL, TaintLabel.CLEAN));
         wm.markProcessed("a");
         wm.compress(List.of("a", "b"), "summary of a and b");
-
-        assertEquals(1, wm.size(), "compress: must replace 2 entries with 1 compressed entry");
+        assertEquals(1, wm.size(),
+                "compress: must replace 2 entries with 1 compressed entry");
         assertEquals(WorkingMemoryTier.COMPRESSED, wm.getAll().get(0).tier());
         assertFalse(wm.isProcessed("a"),
                 "IC4: evicted entry must be removed from processed set");
     }
 
-    // ── clear ─────────────────────────────────────────────────────────────────
+    // ── clear ────────────────────────────────────────────────────────────────
 
     @Test
     void clear_emptiesEverything() {
@@ -128,51 +118,47 @@ class WorkingMemoryConcurrencyTest {
         assertFalse(wm.isProcessed("x"));
     }
 
-    // ── getByOrigin ───────────────────────────────────────────────────────────
+    // ── getByOrigin ──────────────────────────────────────────────────────────
 
     @Test
     void getByOrigin_filtersCorrectly() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
-        wm.add(entry("u1", WorkingMemoryTier.ACTIVE, 0.5, Origin.USER, TaintLabel.CLEAN));
-        wm.add(entry("t1", WorkingMemoryTier.ACTIVE, 0.5, Origin.TOOL, TaintLabel.CLEAN));
+        wm.add(entry("u1", WorkingMemoryTier.ACTIVE, 0.5, Origin.USER,   TaintLabel.CLEAN));
+        wm.add(entry("t1", WorkingMemoryTier.ACTIVE, 0.5, Origin.TOOL,   TaintLabel.CLEAN));
         wm.add(entry("s1", WorkingMemoryTier.ACTIVE, 0.5, Origin.SYSTEM, TaintLabel.CLEAN));
         assertEquals(1, wm.getByOrigin(Origin.USER).size());
         assertEquals(1, wm.getByOrigin(Origin.TOOL).size());
         assertEquals(0, wm.getByOrigin(Origin.AGENT).size());
     }
 
-    // ── markProcessed / isProcessed / getUnprocessed ──────────────────────────
+    // ── markProcessed / isProcessed / getUnprocessed ─────────────────────────
 
     @Test
     void processedTracking() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
         wm.add(entry("p1", WorkingMemoryTier.ACTIVE, 0.5, Origin.USER, TaintLabel.CLEAN));
         wm.add(entry("p2", WorkingMemoryTier.ACTIVE, 0.5, Origin.USER, TaintLabel.CLEAN));
-
         assertEquals(2, wm.getUnprocessed().size());
         assertFalse(wm.isProcessed("p1"));
-
         wm.markProcessed("p1");
         assertTrue(wm.isProcessed("p1"));
         assertEquals(1, wm.getUnprocessed().size());
     }
 
-    // ── estimatedTokenCount ───────────────────────────────────────────────────
+    // ── estimatedTokenCount ──────────────────────────────────────────────────
 
     @Test
     void estimatedTokenCount_approximation() {
         DefaultWorkingMemory wm = new DefaultWorkingMemory();
-        // each entry content = "content-id" ≈ 10 chars / 4 = 2 tokens per entry
         for (int i = 0; i < 10; i++) {
             wm.add(new WorkingMemoryEntry("e" + i, "a".repeat(40),
                     WorkingMemoryTier.ACTIVE, Origin.TOOL, 0.5,
                     Instant.now(), TaintLabel.CLEAN));
         }
-        // 10 entries × 40 chars / 4 = 100 tokens
         assertEquals(100, wm.estimatedTokenCount());
     }
 
-    // ── evictFirst cleans processed set (IC4) ─────────────────────────────────
+    // ── IC4: evictOldest cleans processed set ─────────────────────────────────
 
     @Test
     void ic4_evictOldestCleansProcessedSet() {
@@ -180,13 +166,12 @@ class WorkingMemoryConcurrencyTest {
         wm.add(entry("old", WorkingMemoryTier.ACTIVE, 0.5, Origin.TOOL, TaintLabel.CLEAN));
         wm.markProcessed("old");
         wm.add(entry("new", WorkingMemoryTier.ACTIVE, 0.5, Origin.TOOL, TaintLabel.CLEAN));
-
         wm.evictOldest(1);
         assertFalse(wm.isProcessed("old"),
                 "IC4: evicted entry must be cleaned from processed set");
     }
 
-    // ── SECONDARY tier alias ──────────────────────────────────────────────────
+    // ── SECONDARY tier alias ─────────────────────────────────────────────────
 
     @Test
     void secondaryTierAliasIsBackground() {
@@ -195,7 +180,6 @@ class WorkingMemoryConcurrencyTest {
         wm.add(entry("a", WorkingMemoryTier.ARCHIVED,  0.5, Origin.TOOL, TaintLabel.CLEAN));
         wm.add(entry("x", WorkingMemoryTier.ACTIVE,    0.9, Origin.TOOL, TaintLabel.CLEAN));
         wm.evictLowestRelevance(1);
-        // ARCHIVED(0) should be evicted before SECONDARY(=BACKGROUND=2)
         assertTrue(wm.getAll().stream().noneMatch(e -> e.id().equals("a")),
                 "ARCHIVED must be evicted before SECONDARY");
     }

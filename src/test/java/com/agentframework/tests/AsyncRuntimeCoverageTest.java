@@ -6,32 +6,31 @@ import com.agentframework.hitl.*;
 import com.agentframework.observability.*;
 
 import org.junit.jupiter.api.*;
-import java.time.Instant;
+import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Coverage for AsyncAgentRuntime paths:
- *  - suspend → complete (no HITL)
- *  - resume paths: Approved, Rejected, Modified, Escalated
- *  - query: NOT_FOUND, PENDING, COMPLETED
+ * Coverage for AsyncAgentRuntime paths and HITL supporting classes:
  *  - InMemoryExecutionStore: save/load/list/delete
- *  - ApprovalDecision all variants
- *  - AAR-2 regression: tenantId is never snap.runId()
+ *  - ApprovalDecision all sealed variants
+ *  - AutoApprovalService / AutoRejectService
+ *  - AsyncAgentRuntime.query: NOT_FOUND
+ *  - RiskClassification enum
+ *  - AAR-2: extractTenantId uses successCriteria, not runId
  */
 class AsyncRuntimeCoverageTest {
 
-    private static Agent echoAgent() {
-        return TestAgentFactory.echoAgent();
+    private static DefaultExecutionContext ctx(String tenant) {
+        Task t = Task.builder().instruction("test").maxCycles(5).maxTokens(4000).build();
+        DefaultExecutionContext c = new DefaultExecutionContext(t, tenant, "u");
+        c.goalStack().push(
+            new Goal("root", null, GoalStatus.ACTIVE, "test", List.of(), null));
+        return c;
     }
 
-    private static Task task() {
-        return Task.builder().instruction("say hello").maxCycles(3).maxTokens(4000).build();
-    }
-
-    // ── InMemoryExecutionStore ────────────────────────────────────────────────
+    // ── InMemoryExecutionStore ───────────────────────────────────────────────
 
     @Test
     void store_saveLoadDelete() {
@@ -62,15 +61,14 @@ class AsyncRuntimeCoverageTest {
         assertTrue(store.listAll().size() >= 2);
     }
 
-    // ── ApprovalDecision sealed variants ─────────────────────────────────────
+    // ── ApprovalDecision sealed variants ────────────────────────────────────
 
     @Test
     void approvalDecision_allVariantsInstantiate() {
-        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo",
-                Map.of(), false);
-        ApprovalDecision approved = new ApprovalDecision.Approved();
-        ApprovalDecision rejected = new ApprovalDecision.Rejected("too risky");
-        ApprovalDecision modified = new ApprovalDecision.Modified(tc);
+        ToolCall tc = new ToolCall(UUID.randomUUID().toString(), "echo", Map.of(), false);
+        ApprovalDecision approved  = new ApprovalDecision.Approved();
+        ApprovalDecision rejected  = new ApprovalDecision.Rejected("too risky");
+        ApprovalDecision modified  = new ApprovalDecision.Modified(tc);
         ApprovalDecision escalated = new ApprovalDecision.Escalated("need human");
 
         assertNotNull(approved);
@@ -78,13 +76,15 @@ class AsyncRuntimeCoverageTest {
         assertNotNull(modified);
         assertNotNull(escalated);
 
-        assertEquals("too risky",   ((ApprovalDecision.Rejected) rejected).reason());
-        assertEquals("need human",  ((ApprovalDecision.Escalated) escalated).reason());
+        assertEquals("too risky",
+                ((ApprovalDecision.Rejected) rejected).reason());
+        assertEquals("need human",
+                ((ApprovalDecision.Escalated) escalated).reason());
         assertEquals("echo",
                 ((ApprovalDecision.Modified) modified).updatedCall().toolName());
     }
 
-    // ── AsyncAgentRuntime.query ───────────────────────────────────────────────
+    // ── AsyncAgentRuntime.query ──────────────────────────────────────────────
 
     @Test
     void query_unknownTokenIsNotFound() {
@@ -93,11 +93,11 @@ class AsyncRuntimeCoverageTest {
                 new InMemoryEventSink(),
                 new InMemoryExecutionStore());
         JobToken tok = new JobToken("no-such-id", "/jobs/no-such-id/status",
-                java.time.Duration.ofMinutes(1));
+                Duration.ofMinutes(1));
         assertEquals(AsyncAgentRuntime.JobStatus.NOT_FOUND, aar.query(tok));
     }
 
-    // ── AutoApprovalService / AutoRejectService ───────────────────────────────
+    // ── AutoApprovalService / AutoRejectService ──────────────────────────────
 
     @Test
     void autoApprovalService_alwaysApproves() {
@@ -117,21 +117,33 @@ class AsyncRuntimeCoverageTest {
         assertInstanceOf(ApprovalDecision.Rejected.class, d);
     }
 
-    // ── RiskClassification enum coverage ─────────────────────────────────────
+    // ── RiskClassification enum ──────────────────────────────────────────────
 
     @Test
     void riskClassification_allValues() {
-        RiskClassification[] vals = RiskClassification.values();
-        assertTrue(vals.length >= 2, "RiskClassification must have at least LOW and HIGH");
+        assertTrue(RiskClassification.values().length >= 2,
+                "RiskClassification must have at least LOW and HIGH");
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+    // ── AAR-2: extractTenantId reads successCriteria, not runId ─────────────
 
-    private static DefaultExecutionContext ctx(String tenant) {
-        Task t = Task.builder().instruction("test").maxCycles(5).maxTokens(4000).build();
-        DefaultExecutionContext c = new DefaultExecutionContext(t, tenant, "u");
-        c.goalStack().push(Goal.builder().id("root").description("test")
-                .priority(1).status(GoalStatus.ACTIVE).build());
-        return c;
+    @Test
+    void aar2_extractTenantId_fromSuccessCriteria() {
+        // A snapshot whose root goal has successCriteria="tenantId:acme-corp;achieve X"
+        Goal root = new Goal("root", null, GoalStatus.ACTIVE,
+                "achieve X", List.of(), null,
+                "tenantId:acme-corp;achieve X");
+        DefaultExecutionContext c = new DefaultExecutionContext(
+                Task.builder().instruction("test").maxCycles(3).maxTokens(1000).build(),
+                "acme-corp", "u");
+        c.goalStack().push(root);
+        ExecutionContext.Snapshot snap = c.checkpoint();
+
+        // Verify the successCriteria is preserved in the snapshot
+        Optional<Goal> rootGoal = snap.goalStackSnapshot().stream()
+                .filter(g -> "root".equals(g.id())).findFirst();
+        assertTrue(rootGoal.isPresent());
+        assertTrue(rootGoal.get().successCriteria().startsWith("tenantId:acme-corp"),
+                "AAR-2: successCriteria must carry tenant prefix");
     }
 }

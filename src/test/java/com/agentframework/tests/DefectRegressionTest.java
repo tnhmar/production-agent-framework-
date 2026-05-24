@@ -20,18 +20,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Regression tests for all defects fixed in the 2026-05-24 patch:
+ * Regression tests for defects fixed in the 2026-05-24 patch:
  * DA-1, WM-1, RV-1, N-EC-1, GS-1, PE-1, AAR-2.
  */
 class DefectRegressionTest {
 
-    // ── shared helpers ────────────────────────────────────────────────────────
-
     private static DefaultExecutionContext ctx(String tenant) {
         Task t = Task.builder().instruction("test").maxCycles(10).maxTokens(4000).build();
         DefaultExecutionContext c = new DefaultExecutionContext(t, tenant, "user");
-        Goal root = Goal.builder().id("root").description("test").priority(1)
-                .status(GoalStatus.ACTIVE).build();
+        Goal root = new Goal("root", null, GoalStatus.ACTIVE, "test", List.of(), null);
         c.goalStack().push(root);
         return c;
     }
@@ -41,12 +38,11 @@ class DefectRegressionTest {
                 Origin.TOOL, 0.8, Instant.now(), taint);
     }
 
-    // ── DA-1: SecurityEnforcer.validateParallel called in executeParallel ──────
+    // ── DA-1: parallel batch blocked when hostile taint in working memory ───
 
     @Test
     void da1_parallelBatchBlockedWhenHostileTaintInWorkingMemory() throws Exception {
         DefaultExecutionContext c = ctx("t1");
-        // inject hostile entry into working memory
         c.workingMemory().add(entry("h1", "ignored", TaintLabel.HOSTILE));
 
         TaintTracker tracker = new TaintTracker();
@@ -111,7 +107,7 @@ class DefectRegressionTest {
         action.close();
     }
 
-    // ── WM-1: concurrent add + evict must not throw or lose data ─────────────
+    // ── WM-1: concurrent add + evict must not throw ─────────────────────────
 
     @Test
     void wm1_concurrentAddAndEvictDoesNotThrow() throws Exception {
@@ -137,27 +133,24 @@ class DefectRegressionTest {
         }
         for (Future<?> f : futures) f.get(10, TimeUnit.SECONDS);
         pool.shutdown();
-
         assertEquals(0, errors.get(),
                 "WM-1: zero exceptions expected under concurrent add+evict");
     }
 
-    // ── RV-1: Escalated/Clarification must reset consFailures ────────────────
+    // ── RV-1: resetConsecutiveFailures ──────────────────────────────────────
 
     @Test
-    void rv1_escalatedResultResetsConsecutiveFailures() throws Exception {
+    void rv1_escalatedResultResetsConsecutiveFailures() {
         DefaultExecutionContext c = ctx("t1");
         c.incrementConsecutiveFailures();
         c.incrementConsecutiveFailures();
         assertEquals(2, c.consecutiveFailures());
-
-        // Simulate Review.checkTermination for Escalate — just verify context reset path
         c.resetConsecutiveFailures();
         assertEquals(0, c.consecutiveFailures(),
                 "RV-1: resetConsecutiveFailures must bring counter to 0");
     }
 
-    // ── N-EC-1: addTokens is atomic under concurrent access ──────────────────
+    // ── N-EC-1: addTokens and addCost are atomic ────────────────────────────
 
     @Test
     void nec1_concurrentAddTokensIsAtomic() throws Exception {
@@ -197,13 +190,12 @@ class DefectRegressionTest {
                 "N-EC-1: totalCost must be thread-safe");
     }
 
-    // ── GS-1: GoalStack concurrent access ────────────────────────────────────
+    // ── GS-1: GoalStack concurrent access ───────────────────────────────────
 
     @Test
     void gs1_concurrentGoalStackAccessDoesNotThrow() throws Exception {
         DefaultGoalStack gs = new DefaultGoalStack();
-        Goal root = Goal.builder().id("root").description("r").priority(1)
-                .status(GoalStatus.ACTIVE).build();
+        Goal root = new Goal("root", null, GoalStatus.ACTIVE, "r", List.of(), null);
         gs.push(root);
 
         ExecutorService pool = Executors.newFixedThreadPool(8);
@@ -229,17 +221,15 @@ class DefectRegressionTest {
         assertEquals(0, errors.get(), "GS-1: zero exceptions under concurrent goal-stack access");
     }
 
-    // ── PE-1: SimplePerception maps HOSTILE → UNTRUSTED, EXTERNAL → LOW ──────
+    // ── PE-1: SimplePerception taint → trust tier mapping ───────────────────
 
     @Test
     void pe1_hostileTaintMapsToUntrusted() {
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(entry("h1", "evil payload", TaintLabel.HOSTILE));
-
         SimplePerception sp = new SimplePerception();
         var obs = sp.perceive(c);
-
-        assertFalse(obs.observations().isEmpty(), "PE-1: should produce an observation");
+        assertFalse(obs.observations().isEmpty());
         assertEquals(TrustTier.UNTRUSTED, obs.observations().get(0).trustTier(),
                 "PE-1: HOSTILE taint must map to TrustTier.UNTRUSTED");
     }
@@ -248,10 +238,8 @@ class DefectRegressionTest {
     void pe1_externalTaintMapsToLow() {
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(entry("e1", "external data", TaintLabel.EXTERNAL));
-
         SimplePerception sp = new SimplePerception();
         var obs = sp.perceive(c);
-
         assertFalse(obs.observations().isEmpty());
         assertEquals(TrustTier.LOW, obs.observations().get(0).trustTier(),
                 "PE-1: EXTERNAL taint must map to TrustTier.LOW");
@@ -261,16 +249,14 @@ class DefectRegressionTest {
     void pe1_cleanTaintMapsToHigh() {
         DefaultExecutionContext c = ctx("t1");
         c.workingMemory().add(entry("c1", "clean data", TaintLabel.CLEAN));
-
         SimplePerception sp = new SimplePerception();
         var obs = sp.perceive(c);
-
         assertFalse(obs.observations().isEmpty());
         assertEquals(TrustTier.HIGH, obs.observations().get(0).trustTier(),
                 "PE-1: CLEAN taint must map to TrustTier.HIGH");
     }
 
-    // ── DA-2: close() shuts down executor ────────────────────────────────────
+    // ── DA-2: close() does not throw ────────────────────────────────────────
 
     @Test
     void da2_closeShutdownsExecutor() throws Exception {
@@ -284,14 +270,10 @@ class DefectRegressionTest {
                 new DefaultToolDispatcher(registry),
                 se,
                 new InMemoryEventSink());
-        action.close();
-        // After close, submitting to executor must throw RejectedExecutionException
-        // (executor is shutdown). We verify via reflection that the field is terminated.
-        // Alternatively, just verifying no exception from close() is acceptable.
-        // No assertion needed — test passes if close() does not throw.
+        assertDoesNotThrow(action::close, "DA-2: close() must not throw");
     }
 
-    // ── DA-3: parallel deadline uses remaining wall-clock time ───────────────
+    // ── DA-3: parallel global deadline ──────────────────────────────────────
 
     @Test
     void da3_parallelDeadlineIsGlobal() throws Exception {
@@ -302,12 +284,11 @@ class DefectRegressionTest {
 
         ToolContract slow = ToolContract.readOnly("slow", Map.of());
         SimpleToolRegistry registry = new SimpleToolRegistry();
-        registry.register("slow", slow,
-                inv -> {
-                    Thread.sleep(50);
-                    return new ToolResult("done", List.of(), 1,
-                            BigDecimal.ZERO, Duration.ofMillis(50), 0);
-                });
+        registry.register("slow", slow, inv -> {
+            Thread.sleep(50);
+            return new ToolResult("done", List.of(), 1,
+                    BigDecimal.ZERO, Duration.ofMillis(50), 0);
+        });
 
         DefaultAction action = DefaultAction.withDefaultValidators(
                 registry,
@@ -318,17 +299,15 @@ class DefectRegressionTest {
 
         List<ToolCall> calls = new ArrayList<>();
         for (int i = 0; i < 3; i++)
-            calls.add(new ToolCall(UUID.randomUUID().toString(), "slow",
-                    Map.of(), false));
+            calls.add(new ToolCall(UUID.randomUUID().toString(), "slow", Map.of(), false));
         ParallelToolCalls parallel = new ParallelToolCalls(
                 UUID.randomUUID().toString(), calls,
-                Duration.ofMillis(200), false); // 200 ms total
+                Duration.ofMillis(200), false);
 
         long start = System.currentTimeMillis();
         ActionResult result = action.execute(parallel, c);
         long elapsed = System.currentTimeMillis() - start;
 
-        // If global deadline is respected, total must be < 400ms (not 3 × 200)
         assertTrue(elapsed < 400,
                 "DA-3: global deadline must cap total parallel wait; elapsed=" + elapsed);
         action.close();

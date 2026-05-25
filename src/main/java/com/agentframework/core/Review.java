@@ -109,7 +109,16 @@ class Review {
         TerminationReason reason = checkTermination(result, decision, ctx);
         if (reason != null) {
             ctx.setTerminationReason(reason);
-            ctx.transitionTo(RunState.COMPLETED);
+            // COMPLETED is reserved for genuine goal achievement only.
+            // Escalation and failure-escalation are non-success outcomes: they
+            // must transition to TERMINATED so that any caller inspecting the
+            // terminal state (e.g. SupervisorOrchestrator) can distinguish a
+            // successful run from an aborted one and react accordingly.
+            if (reason instanceof TerminationReason.GoalCompleted) {
+                ctx.transitionTo(RunState.COMPLETED);
+            } else {
+                ctx.transitionTo(RunState.TERMINATED);
+            }
         }
     }
 

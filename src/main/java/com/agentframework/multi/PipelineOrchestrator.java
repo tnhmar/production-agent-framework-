@@ -1,6 +1,7 @@
 package com.agentframework.multi;
 
 import com.agentframework.core.*;
+import com.agentframework.foundation.RunState;
 import com.agentframework.foundation.Task;
 import java.util.*;
 
@@ -79,7 +80,7 @@ public class PipelineOrchestrator implements AgentOrchestrator {
         return new MultiAgentResult(allResults, agents, ctx.runId(), traces);
     }
 
-    private static boolean isFailure(AgentState state) {
-        return state == AgentState.ABORTED || state == AgentState.DEGRADED;
+    private static boolean isFailure(RunState state) {
+        return state == RunState.ABORTED || state == RunState.DEGRADED;
     }
 }

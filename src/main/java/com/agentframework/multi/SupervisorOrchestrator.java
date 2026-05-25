@@ -1,6 +1,7 @@
 package com.agentframework.multi;
 
 import com.agentframework.core.*;
+import com.agentframework.foundation.RunState;
 import com.agentframework.foundation.Task;
 import java.util.*;
 
@@ -59,7 +60,7 @@ public class SupervisorOrchestrator implements AgentOrchestrator {
     }
 
     /** Returns true for any state that represents a non-recoverable failure. */
-    private static boolean isFailure(AgentState state) {
-        return state == AgentState.ABORTED || state == AgentState.DEGRADED;
+    private static boolean isFailure(RunState state) {
+        return state == RunState.ABORTED || state == RunState.DEGRADED;
     }
 }

@@ -14,7 +14,7 @@ public class TieredMemory implements Memory {
 
     private static final Logger LOG = Logger.getLogger(TieredMemory.class.getName());
 
-    private final VectorStore      hotVec,  warmVec;
+    private final VectorStore      hotVec,  warmVec, coldVec;
     private final RelationalStore  hotRel,  warmRel, coldRel;
     private final ObjectStore      coldObj;
     private final KnowledgeGraph   kg;
@@ -47,8 +47,9 @@ public class TieredMemory implements Memory {
     }
 
     private TieredMemory(Builder b) {
-        hotVec = b.hotVec; warmVec = b.warmVec; hotRel = b.hotRel; warmRel = b.warmRel;
-        coldRel = b.coldRel; coldObj = b.coldObj; kg = b.kg; scheduler = b.scheduler;
+        hotVec = b.hotVec; warmVec = b.warmVec; coldVec = b.coldVec;
+        hotRel = b.hotRel; warmRel = b.warmRel; coldRel = b.coldRel;
+        coldObj = b.coldObj; kg = b.kg; scheduler = b.scheduler;
         extractor = b.extractor; scorer = b.scorer; gate = b.gate;
         auditLog = b.auditLog; embedFn = b.embedFn;
         summarizer = b.summarizer != null ? b.summarizer : Summarizer.truncating();
@@ -116,10 +117,11 @@ public class TieredMemory implements Memory {
             Set<String> seen = new HashSet<>();
             filtered.forEach(r -> seen.add(r.id()));
 
+            // Dense search uses coldVec (VectorStore); sparse search uses coldRel (RelationalStore).
             List<Neighbor>     coldDense  = new ArrayList<>();
-            List<MemoryRecord> coldSparse = new ArrayList<>();
+            List<MemoryRecord> coldSparse;
             try {
-                coldDense  = coldRel.vectorSearch(qEmb, coldTopK * 2, ctx);
+                coldDense = coldVec.search(qEmb, coldTopK * 2, ctx);
             } catch (UnsupportedOperationException ignored) {
                 // Cold vector store may not support dense search — fall through to sparse only.
             }
@@ -168,7 +170,7 @@ public class TieredMemory implements Memory {
     }
 
     public void delete(String id, RequestContext ctx) {
-        hotVec.delete(id, ctx);  warmVec.delete(id, ctx);
+        hotVec.delete(id, ctx);  warmVec.delete(id, ctx);  coldVec.delete(id, ctx);
         hotRel.delete(id, ctx);  warmRel.delete(id, ctx);  coldRel.delete(id, ctx);
         coldObj.delete(id, ctx);
     }
@@ -213,6 +215,10 @@ public class TieredMemory implements Memory {
                     try {
                         coldObj.put(id, rec.content().text().getBytes(StandardCharsets.UTF_8), sys);
                         coldRel.insert(rec, sys);
+                        List<Double> emb = rec.content().embedding() != null
+                            ? rec.content().embedding()
+                            : embedFn.embed(rec.content().text());
+                        coldVec.insert(id, emb, rec.content().text(), sys);
                         coldWriteOk = true;
                     } catch (Exception e) {
                         LOG.warning("Janitor: cold-write failed for id=" + id +
@@ -239,7 +245,7 @@ public class TieredMemory implements Memory {
     public static Builder builder() { return new Builder(); }
 
     public static class Builder {
-        VectorStore hotVec, warmVec;
+        VectorStore hotVec, warmVec, coldVec;
         RelationalStore hotRel, warmRel, coldRel;
         ObjectStore coldObj;
         KnowledgeGraph kg;
@@ -253,6 +259,7 @@ public class TieredMemory implements Memory {
 
         public Builder hotVec(VectorStore v)          { hotVec = v;       return this; }
         public Builder warmVec(VectorStore v)         { warmVec = v;      return this; }
+        public Builder coldVec(VectorStore v)         { coldVec = v;      return this; }
         public Builder hotRel(RelationalStore r)      { hotRel = r;       return this; }
         public Builder warmRel(RelationalStore r)     { warmRel = r;      return this; }
         public Builder coldRel(RelationalStore r)     { coldRel = r;      return this; }
@@ -270,6 +277,7 @@ public class TieredMemory implements Memory {
         public TieredMemory build() {
             Objects.requireNonNull(hotVec,    "hotVec");
             Objects.requireNonNull(warmVec,   "warmVec");
+            Objects.requireNonNull(coldVec,   "coldVec");
             Objects.requireNonNull(hotRel,    "hotRel");
             Objects.requireNonNull(warmRel,   "warmRel");
             Objects.requireNonNull(coldRel,   "coldRel");
@@ -288,13 +296,15 @@ public class TieredMemory implements Memory {
         public static TieredMemory inMemory() {
             InMemoryVectorStore     hot  = new InMemoryVectorStore();
             InMemoryVectorStore     warm = new InMemoryVectorStore();
+            InMemoryVectorStore     cold = new InMemoryVectorStore();
             InMemoryRelationalStore hr   = new InMemoryRelationalStore();
             InMemoryRelationalStore wr   = new InMemoryRelationalStore();
             InMemoryRelationalStore cr   = new InMemoryRelationalStore();
             InMemoryObjectStore     co   = new InMemoryObjectStore();
             InMemoryKnowledgeGraph  kg   = new InMemoryKnowledgeGraph();
             return new Builder()
-                .hotVec(hot).warmVec(warm).hotRel(hr).warmRel(wr).coldRel(cr).coldObj(co)
+                .hotVec(hot).warmVec(warm).coldVec(cold)
+                .hotRel(hr).warmRel(wr).coldRel(cr).coldObj(co)
                 .kg(kg).scheduler(new InMemoryProspectiveScheduler())
                 .extractor(new PassThroughEntityExtractor())
                 .scorer(new DefaultImportanceScorer())

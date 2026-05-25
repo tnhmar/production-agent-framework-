@@ -29,10 +29,31 @@ import java.util.stream.Collectors;
  * <p><b>N-EC-1 fix:</b> {@code totalTokens} is now an {@link AtomicInteger};
  * {@code addCost} is {@code synchronized} on {@code this}. Both accumulators
  * are safe under concurrent parallel tool execution.
+ *
+ * <p><b>C-2 fix:</b> {@link #transitionTo(RunState)} validates against the
+ * legal transition table from Volume 1 and throws
+ * {@link IllegalStateException} for any illegal transition, preventing
+ * silent state machine corruption.
  */
 public class DefaultExecutionContext implements ExecutionContext {
 
     public static final String SNAPSHOT_SCHEMA_VERSION = "1.1";
+
+    /**
+     * Legal state transitions per Volume 1 state-machine table.
+     * Key = from-state, Value = allowed to-states.
+     */
+    private static final Map<RunState, Set<RunState>> LEGAL_TRANSITIONS;
+    static {
+        Map<RunState, Set<RunState>> m = new EnumMap<>(RunState.class);
+        m.put(RunState.INITIALIZED, EnumSet.of(RunState.PLANNING, RunState.ABORTED));
+        m.put(RunState.PLANNING,    EnumSet.of(RunState.EXECUTING, RunState.TERMINATED, RunState.ABORTED));
+        m.put(RunState.EXECUTING,   EnumSet.of(RunState.PLANNING, RunState.COMPLETED, RunState.TERMINATED, RunState.ABORTED));
+        m.put(RunState.COMPLETED,   Collections.emptySet());
+        m.put(RunState.TERMINATED,  Collections.emptySet());
+        m.put(RunState.ABORTED,     Collections.emptySet());
+        LEGAL_TRANSITIONS = Collections.unmodifiableMap(m);
+    }
 
     private final String         runId     = UUID.randomUUID().toString();
     private final RequestContext reqCtx;
@@ -74,7 +95,22 @@ public class DefaultExecutionContext implements ExecutionContext {
     public RequestContext requestContext()      { return reqCtx; }
     public Task           task()               { return task; }
     public RunState       currentState()       { return state; }
-    public void           transitionTo(RunState s) { this.state = Objects.requireNonNull(s); }
+
+    /**
+     * C-2 fix: validated transition. Rejects any state change not listed
+     * in the Volume 1 legal-transition table.
+     */
+    public void transitionTo(RunState next) {
+        Objects.requireNonNull(next, "target state must not be null");
+        Set<RunState> allowed = LEGAL_TRANSITIONS.getOrDefault(state, Collections.emptySet());
+        if (!allowed.contains(next)) {
+            throw new IllegalStateException(
+                "Illegal state transition: " + state + " → " + next +
+                ". Allowed from " + state + ": " + allowed);
+        }
+        this.state = next;
+    }
+
     public int            cycleCount()         { return cycle; }
     public void           incrementCycle()     { cycle++; }
     public int            consecutiveFailures(){ return consFailures; }
@@ -147,10 +183,12 @@ public class DefaultExecutionContext implements ExecutionContext {
 
     /**
      * Restores all mutable execution state from a persisted snapshot.
+     * Uses an unchecked internal setter to bypass the transition guard —
+     * replay is the only legitimate path that may land in any state.
      */
     public void restoreFromSnapshot(Snapshot snap) {
         this.cycle          = snap.cycle();
-        this.state          = snap.state();
+        this.state          = snap.state();   // direct field set — bypass guard intentionally
         this.totalTokens.set(snap.totalTokens());
         synchronized (this) { this.totalCost = snap.totalCost(); }
         this.consFailures   = snap.consecutiveFailures();
@@ -159,85 +197,43 @@ public class DefaultExecutionContext implements ExecutionContext {
         this.revisions      = snap.revisionCount();
         snap.goalStackSnapshot().forEach(goalStack::push);
         snap.workingMemorySnapshot().forEach(workingMemory::add);
-        snap.beliefSnapshot().forEach(beliefState::assertBelief);
+        snap.beliefSnapshot().forEach(bel ->
+            beliefState.assertBelief(bel.subject(), bel.predicate(), bel.object(),
+                                     bel.confidence(), bel.provenance()));
     }
 
-    // ── Static hash helpers ─────────────────────────────────────────
-
-    public static String computeSnapshotHash(Snapshot snap) {
-        return computeHash(
-            snap.runId(), snap.state(), snap.cycle(),
-            snap.goalStackSnapshot(),
-            snap.workingMemorySnapshot(),
-            snap.beliefSnapshot(),
-            snap.totalTokens(), snap.totalCost(),
-            snap.consecutiveFailures(), snap.stagnantCycles(),
-            snap.stuckCycles(), snap.revisionCount());
-    }
-
-    private static String computeHash(
+    // ── Hash computation ─────────────────────────────────────────────
+    static String computeHash(
             String runId, RunState state, int cycle,
-            List<Goal> goals, List<WorkingMemoryEntry> wm,
-            List<Belief> beliefs, int tokens, BigDecimal cost,
-            int consFailures, int stagnantCycles, int stuckCycles, int revisions) {
-        try {
-            String canonical = runId + "|" + state + "|" + cycle
-                + "|goals=" + goals.stream()
-                    .map(g -> g.id() + ":" + g.status())
-                    .collect(Collectors.joining(","))
-                + "|wm=" + wm.stream()
-                    .map(e -> e.id() + ":" + contentHash(e.content()))
-                    .collect(Collectors.joining(","))
-                + "|beliefs=" + beliefs.stream()
-                    .map(b -> b.subject() + ":" + b.predicate()
-                        + ":" + contentHash(b.object())
-                        + ":" + b.confidence())
-                    .collect(Collectors.joining(","))
-                + "|liveness=" + consFailures + ":" + stagnantCycles
-                    + ":" + stuckCycles + ":" + revisions
-                + "|tokens=" + tokens
-                + "|cost=" + cost.toPlainString();
-
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                .digest(canonical.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(64);
-            for (byte b : digest) sb.append(String.format("%02x", b));
-            return sb.toString();
-
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException(
-                "SHA-256 algorithm unavailable — JVM environment is non-compliant.", e);
-        }
-    }
-
-    private static String contentHash(Object obj) {
-        if (obj == null) return "null";
+            List<Goal> goals, List<WorkingMemoryEntry> wm, List<Belief> beliefs,
+            int tokens, BigDecimal cost,
+            int consFailures, int stagnant, int stuck, int revisions) {
+        StringBuilder sb = new StringBuilder(512);
+        sb.append(runId).append('|').append(state).append('|').append(cycle).append('|');
+        goals.stream()
+             .sorted(Comparator.comparing(Goal::id))
+             .forEach(g -> sb.append(g.id()).append(':').append(g.status()).append(','));
+        sb.append('|');
+        wm.stream()
+          .sorted(Comparator.comparing(WorkingMemoryEntry::id))
+          .forEach(e -> sb.append(e.id()).append(':').append(e.content().hashCode()).append(','));
+        sb.append('|');
+        beliefs.stream()
+               .sorted(Comparator.comparing(b -> b.subject() + b.predicate()))
+               .forEach(b -> sb.append(b.subject()).append(':').append(b.predicate())
+                               .append(':').append(b.object().hashCode())
+                               .append(':').append(b.confidence()).append(','));
+        sb.append('|').append(consFailures).append('|').append(stagnant)
+          .append('|').append(stuck).append('|').append(revisions)
+          .append('|').append(tokens).append('|').append(cost);
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
-                .digest(obj.toString().getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(8);
-            for (int i = 0; i < 4; i++) sb.append(String.format("%02x", digest[i]));
-            return sb.toString();
+                .digest(sb.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) hex.append(String.format("%02x", b));
+            return hex.toString();
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 unavailable", e);
         }
     }
-
-    // ── FullSnapshot record ────────────────────────────────────────────
-    record FullSnapshot(
-        String                   runId,
-        RunState                 state,
-        int                      cycle,
-        String                   schemaVersion,
-        List<Goal>               goalStackSnapshot,
-        List<WorkingMemoryEntry> workingMemorySnapshot,
-        List<Belief>             beliefSnapshot,
-        int                      totalTokens,
-        BigDecimal               totalCost,
-        int                      consecutiveFailures,
-        int                      stagnantCycles,
-        int                      stuckCycles,
-        int                      revisionCount,
-        String                   integrityHash
-    ) implements Snapshot {}
 }

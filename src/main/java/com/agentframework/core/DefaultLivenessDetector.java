@@ -10,6 +10,7 @@ import com.agentframework.foundation.ToolCall;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -30,8 +31,13 @@ import java.util.stream.Collectors;
  * consecutive cycles the run is terminated with
  * {@link TerminationReason.Escalated}.
  *
- * <p>Both thresholds are constructor-configurable so tests and integrations can
- * use lower values without modifying production constants.
+ * <p><b>C-5 fix:</b> {@link #hashGoalState(List)} sorts goals by id before
+ * hashing.  This guarantees that two semantically identical goal sets always
+ * produce the same hash regardless of insertion order, preventing false-positive
+ * stagnation signals after snapshot restore.
+ *
+ * <p>Both thresholds are constructor-configurable so tests and integrations
+ * can use lower values without modifying production constants.
  */
 public class DefaultLivenessDetector implements LivenessDetector {
 
@@ -91,11 +97,16 @@ public class DefaultLivenessDetector implements LivenessDetector {
     // ── Goal-state hashing (static — testable independently) ─────────────
 
     /**
-     * Computes a SHA-256-based hash over the id and status of every goal
-     * on the stack.  Returns the full 64-character hex digest.
+     * Computes a SHA-256-based hash over the id and status of every goal.
+     *
+     * <p><b>C-5 fix:</b> goals are sorted by {@link Goal#id()} before
+     * serialisation.  Insertion order is irrelevant — two goal sets with
+     * identical contents always produce the same hash, even after a
+     * snapshot restore that may re-push goals in a different order.
      */
     public static String hashGoalState(List<Goal> goals) {
         String canonical = goals.stream()
+            .sorted(Comparator.comparing(Goal::id))          // C-5: canonical order
             .map(g -> g.id() + "=" + g.status().name())
             .collect(Collectors.joining(","));
         try {

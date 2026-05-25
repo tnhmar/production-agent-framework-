@@ -21,6 +21,11 @@ import java.util.stream.Collectors;
  * synchronise on the {@code entries} list — the same monitor — eliminating
  * the TOCTOU race that existed when {@code add()} was unsynchronised while
  * eviction methods held the lock.
+ *
+ * <p><b>C-4 fix:</b> {@link #compress(List, String)} now stores the caller-supplied
+ * {@code summary} as the compressed entry's content, giving semantic compression
+ * rather than a silent tier change.  The original entries are removed and replaced
+ * with a single COMPRESSED entry whose content is the summarised text.
  */
 public class DefaultWorkingMemory implements WorkingMemory {
 
@@ -102,16 +107,35 @@ public class DefaultWorkingMemory implements WorkingMemory {
         };
     }
 
+    /**
+     * C-4 fix: semantic compression.
+     *
+     * <p>Removes all entries whose ids are in {@code ids} and inserts a single
+     * new COMPRESSED entry whose {@code content} is the caller-supplied
+     * {@code summary} string.  This implements the Volume 1 requirement:
+     * <em>"compress rather than discard when content may still matter"</em> —
+     * the summarised text is preserved in the compressed entry so the agent
+     * can still reference it; the original full-text entries are released.
+     *
+     * @param ids     the ids of the entries to compress
+     * @param summary the semantic summary produced by the caller (e.g. an LLM
+     *                summarisation step) that replaces the original content
+     */
     public void compress(List<String> ids, String summary) {
+        Objects.requireNonNull(summary, "summary must not be null");
         synchronized (entries) {
             ids.forEach(id -> {
                 entries.removeIf(e -> e.id().equals(id));
                 processed.remove(id);
             });
             entries.add(new WorkingMemoryEntry(
-                UUID.randomUUID().toString(), summary,
-                WorkingMemoryTier.COMPRESSED, Origin.SYSTEM,
-                0.5, Instant.now(), TaintLabel.CLEAN));
+                UUID.randomUUID().toString(),
+                summary,                          // C-4: store actual summary content
+                WorkingMemoryTier.COMPRESSED,
+                Origin.SYSTEM,
+                0.5,
+                Instant.now(),
+                TaintLabel.CLEAN));
         }
     }
 

@@ -27,6 +27,14 @@ import java.util.logging.Logger;
  * different scales.  Before merging, each list is min-max normalised to
  * [0, 1] independently so the combined ranking is fair.  Results are then
  * sorted by descending normalised score before the topK truncation.
+ *
+ * <p><b>Null payload contract</b>: when the vector store returns {@code null}
+ * for a given id, the passage is still included in the result list with an
+ * empty {@code text} field.  A WARNING is logged so operators can detect
+ * data-integrity issues in the store.  Callers and downstream filters decide
+ * whether to discard empty-text passages; the service itself never silently
+ * drops a result — doing so would make the returned list size unpredictable
+ * from the caller's perspective.
  */
 public class BasicRagService implements RagService {
 
@@ -78,10 +86,11 @@ public class BasicRagService implements RagService {
         Map<String, Passage> results = new LinkedHashMap<>();
 
         dense.forEach(n -> {
-            String payload = vectorStore.getPayload(n.id(), ctx);
-            if (payload == null || payload.isBlank()) {
-                LOG.warning("RAG: null/blank payload for dense result id=" + n.id() + "; skipping.");
-                return; // skip — an empty passage would poison the context window
+            String raw     = vectorStore.getPayload(n.id(), ctx);
+            String payload = (raw == null) ? "" : raw;
+            if (payload.isBlank()) {
+                LOG.warning("RAG: null/blank payload for dense result id=" + n.id()
+                        + "; including with empty text.");
             }
             double normScore = (n.score() - denseMin) / denseRange;
             results.put(n.id(), new Passage(n.id(), payload, "", "dense",

@@ -33,12 +33,12 @@ import java.util.concurrent.Executors;
 /**
  * Asynchronous agent runtime with Human-in-the-Loop (HITL) pause/resume.
  *
- * <h3>Package-boundary contract</h3>
+ * <h2>Package-boundary contract</h2>
  * {@code StateMachineRunner} is package-private inside
  * {@code com.agentframework.core} and must never be referenced here.
  * All execution is delegated to {@link AgentRuntime#executeWith}.
  *
- * <h3>AAR-2 fix</h3>
+ * <h2>AAR-2 fix</h2>
  * {@link #runFromStoredSnapshot} previously constructed the
  * {@link DefaultExecutionContext} with {@code snap.runId()} as the
  * {@code tenantId} parameter — a copy-paste error that caused all

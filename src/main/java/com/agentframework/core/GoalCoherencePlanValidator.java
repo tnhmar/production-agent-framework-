@@ -7,7 +7,7 @@ import java.util.Optional;
 /**
  * Validates plan decisions against the active goal's coherence constraints.
  *
- * <h3>Terminal-decision policy</h3>
+ * <h2>Terminal-decision policy</h2>
  * <ul>
  *   <li>{@link Escalate} and {@link AskClarification} — always pass. These
  *       represent the agent requesting human intervention; blocking them would
@@ -20,7 +20,7 @@ import java.util.Optional;
  *       {@link ValidationResult.Failed}.</li>
  * </ul>
  *
- * <h3>Non-terminal decision policy</h3>
+ * <h2>Non-terminal decision policy</h2>
  * <ul>
  *   <li><b>excludedTools</b> — a tool in the active goal's excluded-tool set
  *       is blocked with {@link ValidationResult.NeedsCorrection}.</li>
@@ -29,7 +29,7 @@ import java.util.Optional;
  *       {@link ValidationResult.NeedsCorrection}.</li>
  * </ul>
  *
- * <h3>Empty-stack guard</h3>
+ * <h2>Empty-stack guard</h2>
  * Any decision (including {@link FinalAnswer}) issued before the state machine
  * has pushed a root goal is rejected with {@link ValidationResult.Failed}.
  */
@@ -82,41 +82,4 @@ public class GoalCoherencePlanValidator implements PlanValidator {
                 "Decision rejected: root goal is already COMPLETED", List.of());
         }
         if (rootStatus == GoalStatus.FAILED) {
-            return new ValidationResult.Failed(
-                "Decision rejected: root goal has FAILED", List.of());
-        }
-
-        // Tool-constraint checks (ToolCall only).
-        if (d instanceof ToolCall tc) {
-            Goal active = ctx.goalStack().current().orElse(rootOpt.get());
-            String toolName = tc.toolName();
-
-            if (active.excludedTools().contains(toolName)) {
-                return new ValidationResult.NeedsCorrection(
-                    "Tool '" + toolName + "' is excluded for goal '" + active.id() + "'",
-                    null);
-            }
-
-            if (!active.requiredTools().isEmpty()
-                    && !active.requiredTools().contains(toolName)) {
-                return new ValidationResult.NeedsCorrection(
-                    "Tool '" + toolName + "' is not in the required-tool whitelist for goal '"
-                    + active.id() + "'", null);
-            }
-        }
-
-        return new ValidationResult.Passed();
-    }
-
-    @Override
-    public ValidationResult validateAfterAction(ActionResult result, ExecutionContext ctx) {
-        Optional<Goal> rootOpt = ctx.goalStack().all().stream()
-            .filter(g -> "root".equals(g.id()))
-            .findFirst();
-        if (rootOpt.isPresent() && rootOpt.get().status() == GoalStatus.FAILED) {
-            return new ValidationResult.NeedsCorrection(
-                "Root goal has transitioned to FAILED after action", null);
-        }
-        return new ValidationResult.Passed();
-    }
-}
+     

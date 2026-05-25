@@ -82,4 +82,30 @@ public class GoalCoherencePlanValidator implements PlanValidator {
                 "Decision rejected: root goal is already COMPLETED", List.of());
         }
         if (rootStatus == GoalStatus.FAILED) {
-     
+            return new ValidationResult.Failed(
+                "Decision rejected: root goal has FAILED", List.of());
+        }
+
+        // From here: root is PENDING or ACTIVE, decision is a ToolCall.
+        if (!(d instanceof ToolCall tc)) {
+            return new ValidationResult.Passed();
+        }
+
+        Goal root = rootOpt.get();
+
+        // excludedTools check
+        if (root.excludedTools() != null && root.excludedTools().contains(tc.toolName())) {
+            return new ValidationResult.NeedsCorrection(
+                "Tool '" + tc.toolName() + "' is excluded by the active goal");
+        }
+
+        // requiredTools check (non-empty list = whitelist)
+        if (root.requiredTools() != null && !root.requiredTools().isEmpty()
+                && !root.requiredTools().contains(tc.toolName())) {
+            return new ValidationResult.NeedsCorrection(
+                "Tool '" + tc.toolName() + "' is not in the required-tool whitelist");
+        }
+
+        return new ValidationResult.Passed();
+    }
+}

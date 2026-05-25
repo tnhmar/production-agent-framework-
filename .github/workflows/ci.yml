@@ -131,10 +131,10 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRO }}
           cache: maven
-      - name: Run SpotBugs
+      - name: Run SpotBugs (fail on findings)
         run: |
           mvn --batch-mode --no-transfer-progress \
-            compile spotbugs:spotbugs \
+            compile spotbugs:check \
             -Dspotbugs.skip=false \
             -Dcheckstyle.skip=true \
             -Ddependency-check.skip=true

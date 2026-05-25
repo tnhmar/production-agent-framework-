@@ -17,6 +17,11 @@ import java.util.*;
  * <p>If any local agent returns a terminal failure state the run is aborted
  * immediately and an {@link OrchestratorException} is thrown rather than
  * allowing subsequent agents to operate on stale context.
+ *
+ * <p>Terminal failure states are {@link RunState#ABORTED}, {@link RunState#DEGRADED},
+ * and {@link RunState#TERMINATED}.  {@code TERMINATED} covers escalation and other
+ * abnormal exits that are not modelled as {@code ABORTED} but are equally
+ * unrecoverable from the supervisor's perspective.
  */
 public class SupervisorOrchestrator implements AgentOrchestrator {
 
@@ -59,8 +64,18 @@ public class SupervisorOrchestrator implements AgentOrchestrator {
         return new MultiAgentResult(allResults, agents, ctx.runId(), traces);
     }
 
-    /** Returns true for any state that represents a non-recoverable failure. */
+    /**
+     * Returns {@code true} for any state that represents a non-recoverable failure.
+     *
+     * <ul>
+     *   <li>{@link RunState#ABORTED}   – explicit abort by the state machine</li>
+     *   <li>{@link RunState#DEGRADED}  – partial failure / degraded mode exit</li>
+     *   <li>{@link RunState#TERMINATED} – abnormal exit (escalation, forced stop)</li>
+     * </ul>
+     */
     private static boolean isFailure(RunState state) {
-        return state == RunState.ABORTED || state == RunState.DEGRADED;
+        return state == RunState.ABORTED
+            || state == RunState.DEGRADED
+            || state == RunState.TERMINATED;
     }
 }

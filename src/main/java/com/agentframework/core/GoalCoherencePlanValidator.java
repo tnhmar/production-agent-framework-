@@ -32,6 +32,10 @@ import java.util.Optional;
  * <h2>Empty-stack guard</h2>
  * Any decision (including {@link FinalAnswer}) issued before the state machine
  * has pushed a root goal is rejected with {@link ValidationResult.Failed}.
+ *
+ * <h2>Post-action validation</h2>
+ * {@link #validateAfterAction} always passes: post-action coherence is enforced
+ * by middleware (e.g. RetryMiddleware, SecurityEnforcer), not by this validator.
  */
 public class GoalCoherencePlanValidator implements PlanValidator {
 
@@ -96,16 +100,28 @@ public class GoalCoherencePlanValidator implements PlanValidator {
         // excludedTools check
         if (root.excludedTools() != null && root.excludedTools().contains(tc.toolName())) {
             return new ValidationResult.NeedsCorrection(
-                "Tool '" + tc.toolName() + "' is excluded by the active goal");
+                "Tool '" + tc.toolName() + "' is excluded by the active goal",
+                tc);
         }
 
         // requiredTools check (non-empty list = whitelist)
         if (root.requiredTools() != null && !root.requiredTools().isEmpty()
                 && !root.requiredTools().contains(tc.toolName())) {
             return new ValidationResult.NeedsCorrection(
-                "Tool '" + tc.toolName() + "' is not in the required-tool whitelist");
+                "Tool '" + tc.toolName() + "' is not in the required-tool whitelist",
+                tc);
         }
 
+        return new ValidationResult.Passed();
+    }
+
+    /**
+     * Post-action coherence is delegated to middleware layers (RetryMiddleware,
+     * SecurityEnforcer, etc.). This validator has no post-action invariants to
+     * assert, so it always passes.
+     */
+    @Override
+    public ValidationResult validateAfterAction(ActionResult result, ExecutionContext ctx) {
         return new ValidationResult.Passed();
     }
 }

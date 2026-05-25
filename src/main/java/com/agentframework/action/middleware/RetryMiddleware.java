@@ -29,6 +29,10 @@ import java.util.function.Function;
  *   <li>A {@link SecureRandom} is used by default for jitter to avoid SpotBugs
  *       PREDICTABLE_RANDOM findings in security-sensitive contexts.</li>
  * </ul>
+ *
+ * <p>Use the static factories {@link #of(int, long)} and
+ * {@link #of(int, long, long, Random)} — argument validation is performed there
+ * so the constructor never throws (avoids CT_CONSTRUCTOR_THROW).
  */
 public class RetryMiddleware implements ToolMiddleware {
 
@@ -40,25 +44,30 @@ public class RetryMiddleware implements ToolMiddleware {
     private final long   maxBackoffMs;
     private final Random jitterRandom;
 
-    /** Uses {@link SecureRandom} for jitter by default. */
-    public RetryMiddleware(int defaultMaxRetries, long baseBackoffMs) {
-        this(defaultMaxRetries, baseBackoffMs, DEFAULT_MAX_BACKOFF_MS, new SecureRandom());
-    }
-
-    /**
-     * Full constructor — allows injecting {@code maxBackoffMs} and a seeded
-     * {@link Random} for deterministic unit tests.
-     */
-    public RetryMiddleware(int defaultMaxRetries, long baseBackoffMs,
-                           long maxBackoffMs, Random jitterRandom) {
-        if (defaultMaxRetries < 0)        throw new IllegalArgumentException("defaultMaxRetries must be >= 0");
-        if (baseBackoffMs <= 0)           throw new IllegalArgumentException("baseBackoffMs must be > 0");
-        if (maxBackoffMs < baseBackoffMs) throw new IllegalArgumentException(
-            "maxBackoffMs must be >= baseBackoffMs");
+    private RetryMiddleware(int defaultMaxRetries, long baseBackoffMs,
+                            long maxBackoffMs, Random jitterRandom) {
         this.defaultMaxRetries = defaultMaxRetries;
         this.baseBackoffMs     = baseBackoffMs;
         this.maxBackoffMs      = maxBackoffMs;
         this.jitterRandom      = jitterRandom;
+    }
+
+    /** Uses {@link SecureRandom} for jitter by default. */
+    public static RetryMiddleware of(int defaultMaxRetries, long baseBackoffMs) {
+        return of(defaultMaxRetries, baseBackoffMs, DEFAULT_MAX_BACKOFF_MS, new SecureRandom());
+    }
+
+    /**
+     * Full factory — allows injecting {@code maxBackoffMs} and a seeded
+     * {@link Random} for deterministic unit tests.
+     */
+    public static RetryMiddleware of(int defaultMaxRetries, long baseBackoffMs,
+                                     long maxBackoffMs, Random jitterRandom) {
+        if (defaultMaxRetries < 0)        throw new IllegalArgumentException("defaultMaxRetries must be >= 0");
+        if (baseBackoffMs <= 0)           throw new IllegalArgumentException("baseBackoffMs must be > 0");
+        if (maxBackoffMs < baseBackoffMs) throw new IllegalArgumentException(
+            "maxBackoffMs must be >= baseBackoffMs");
+        return new RetryMiddleware(defaultMaxRetries, baseBackoffMs, maxBackoffMs, jitterRandom);
     }
 
     @Override

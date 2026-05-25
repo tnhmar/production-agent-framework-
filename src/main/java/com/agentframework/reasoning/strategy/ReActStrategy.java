@@ -2,6 +2,7 @@ package com.agentframework.reasoning.strategy;
 
 import com.agentframework.foundation.*;
 import com.agentframework.reasoning.ReasoningStrategy;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.*;
@@ -69,7 +70,7 @@ public class ReActStrategy implements ReasoningStrategy {
                 }
                 default -> new Escalate("Unknown type: " + type, "HIGH");
             };
-        } catch (Exception e) {
+        } catch (JsonProcessingException e) {
             return new Escalate("ReAct parse failed: " + e.getMessage(), "HIGH");
         }
     }

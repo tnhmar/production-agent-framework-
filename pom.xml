@@ -136,6 +136,7 @@
           <threshold>Medium</threshold>
           <failOnError>true</failOnError>
           <sarifOutput>true</sarifOutput>
+          <excludeFilterFile>${project.basedir}/spotbugs-exclude.xml</excludeFilterFile>
         </configuration>
         <executions>
           <execution>

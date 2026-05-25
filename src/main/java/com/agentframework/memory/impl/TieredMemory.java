@@ -1,6 +1,7 @@
 package com.agentframework.memory.impl;
 import com.agentframework.core.RequestContext;
 import com.agentframework.memory.*;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -115,7 +116,7 @@ public class TieredMemory implements Memory {
         new HashMap<>(expirations).forEach((id, exp) -> {
             if (now.isAfter(exp)) {
                 hotRel.get(id, sys).ifPresent(rec -> {
-                    coldObj.put(id, rec.content().text().getBytes(), sys);
+                    coldObj.put(id, rec.content().text().getBytes(StandardCharsets.UTF_8), sys);
                     coldRel.insert(rec, sys);
                     delete(id, sys);
                 });

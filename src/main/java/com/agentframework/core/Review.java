@@ -7,6 +7,8 @@ import com.agentframework.security.TaintClassifier;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Post-action review step executed inside each PLANNING cycle.
@@ -21,6 +23,8 @@ import java.util.UUID;
  * <p>Package-private — instantiated only by {@link StateMachineRunner}.
  */
 class Review {
+
+    private static final Logger LOG = Logger.getLogger(Review.class.getName());
 
     private final PlanValidator        validator;
     private final EventSink            events;
@@ -79,7 +83,9 @@ class Review {
                     com.agentframework.memory.MemoryType.EPISODIC,
                     com.agentframework.memory.MemoryMetadata.of(0.7, "tool_result"),
                     ctx.requestContext());
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                LOG.log(Level.WARNING, "Memory write-back failed for run " + ctx.runId(), e);
+            }
         }
 
         // 6. Re-validate plan after world-changing action
@@ -179,8 +185,6 @@ class Review {
                 return new TerminationReason.FailureEscalation(
                     "Consecutive failure threshold reached (" + MAX_FAILURES + ")");
         } else {
-            // RV-1 fix: reset for ALL non-failure variants including Escalated
-            // and Clarification, which previously fell through without resetting.
             ctx.resetConsecutiveFailures();
         }
         return null;

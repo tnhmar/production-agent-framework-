@@ -4,6 +4,7 @@ import io.micrometer.core.instrument.*;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Production {@link EventSink} backed by a Micrometer {@link MeterRegistry}.
@@ -101,13 +102,5 @@ public class MicrometerEventSink implements EventSink {
 
             default -> {}
         }
-    }
-
-    private static final class AtomicInteger {
-        private volatile int value;
-        AtomicInteger(int v) { this.value = v; }
-        synchronized void incrementAndGet() { value++; }
-        synchronized void decrementAndGet() { if (value > 0) value--; }
-        int get() { return value; }
     }
 }

@@ -53,7 +53,7 @@ public class RagTest {
 
     @Test
     public void testRetrieveDensePassages() {
-        List<Neighbor>    neighbors = List.of(new Neighbor("p1", 0.9), new Neighbor("p2", 0.8));
+        List<Neighbor>    neighbors = List.of(Neighbor.of("p1", 0.9), Neighbor.of("p2", 0.8));
         Map<String,String> payloads = Map.of("p1", "content one", "p2", "content two");
 
         BasicRagService svc = new BasicRagService(
@@ -71,8 +71,8 @@ public class RagTest {
     @Test
     public void testRetrieveTopKLimit() {
         List<Neighbor>    neighbors = List.of(
-                new Neighbor("a", 0.9), new Neighbor("b", 0.8),
-                new Neighbor("c", 0.7), new Neighbor("d", 0.6));
+                Neighbor.of("a", 0.9), Neighbor.of("b", 0.8),
+                Neighbor.of("c", 0.7), Neighbor.of("d", 0.6));
         Map<String,String> payloads = Map.of("a","A","b","B","c","C","d","D");
 
         BasicRagService svc = new BasicRagService(
@@ -84,7 +84,7 @@ public class RagTest {
 
     @Test
     public void testRetrieveLabelsExternalTaint() {
-        List<Neighbor>    neighbors = List.of(new Neighbor("p1", 0.9));
+        List<Neighbor>    neighbors = List.of(Neighbor.of("p1", 0.9));
         Map<String,String> payloads = Map.of("p1", "sensitive data");
         TaintTracker tracker = new TaintTracker();
 
@@ -101,7 +101,7 @@ public class RagTest {
 
     @Test
     public void testRetrieveNullPayloadFallsBackToEmpty() {
-        List<Neighbor>    neighbors = List.of(new Neighbor("p1", 0.9));
+        List<Neighbor>    neighbors = List.of(Neighbor.of("p1", 0.9));
         Map<String,String> payloads = Map.of(); // no payload for p1
 
         BasicRagService svc = new BasicRagService(

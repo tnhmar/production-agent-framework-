@@ -34,8 +34,9 @@ import java.util.Optional;
  * has pushed a root goal is rejected with {@link ValidationResult.Failed}.
  *
  * <h2>Post-action validation</h2>
- * {@link #validateAfterAction} always passes: post-action coherence is enforced
- * by middleware (e.g. RetryMiddleware, SecurityEnforcer), not by this validator.
+ * {@link #validateAfterAction} returns {@link ValidationResult.NeedsCorrection}
+ * when the root goal is {@link GoalStatus#FAILED} — further tool calls into a
+ * dead goal are incoherent. All other post-action states pass.
  */
 public class GoalCoherencePlanValidator implements PlanValidator {
 
@@ -67,7 +68,6 @@ public class GoalCoherencePlanValidator implements PlanValidator {
         GoalStatus rootStatus = rootOpt.get().status();
 
         // FinalAnswer is coherent only while the root goal is still active.
-        // Once the root is COMPLETED a second FinalAnswer is spurious.
         if (d instanceof FinalAnswer) {
             if (rootStatus == GoalStatus.COMPLETED) {
                 return new ValidationResult.Failed(
@@ -116,12 +116,30 @@ public class GoalCoherencePlanValidator implements PlanValidator {
     }
 
     /**
-     * Post-action coherence is delegated to middleware layers (RetryMiddleware,
-     * SecurityEnforcer, etc.). This validator has no post-action invariants to
-     * assert, so it always passes.
+     * Post-action coherence check.
+     *
+     * <p>Returns {@link ValidationResult.NeedsCorrection} when the root goal
+     * has transitioned to {@link GoalStatus#FAILED} after the action completed,
+     * signalling the runtime that continuing to issue tool calls into this goal
+     * is incoherent. Returns {@link ValidationResult.Passed} in all other cases,
+     * including when no root goal is present (stack not yet initialised).
      */
     @Override
     public ValidationResult validateAfterAction(ActionResult result, ExecutionContext ctx) {
+        Optional<Goal> rootOpt = ctx.goalStack().all().stream()
+            .filter(g -> "root".equals(g.id()))
+            .findFirst();
+
+        if (rootOpt.isEmpty()) {
+            return new ValidationResult.Passed();
+        }
+
+        if (rootOpt.get().status() == GoalStatus.FAILED) {
+            return new ValidationResult.NeedsCorrection(
+                "Post-action: root goal is FAILED — further tool calls are incoherent",
+                null);
+        }
+
         return new ValidationResult.Passed();
     }
 }

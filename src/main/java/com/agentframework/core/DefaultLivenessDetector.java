@@ -6,6 +6,7 @@ import com.agentframework.foundation.FinalAnswer;
 import com.agentframework.foundation.ParallelToolCalls;
 import com.agentframework.foundation.TerminationReason;
 import com.agentframework.foundation.ToolCall;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -32,31 +33,23 @@ import java.util.stream.Collectors;
  *
  * <p>Both thresholds are constructor-configurable so tests and integrations can
  * use lower values without modifying production constants.
- *
- * <p>Use the static factories {@link #withDefaults()} and
- * {@link #of(int, int)} — argument validation is performed there so the
- * constructor never throws (avoids CT_CONSTRUCTOR_THROW).
  */
 public class DefaultLivenessDetector implements LivenessDetector {
 
     private final int maxStagnantCycles;
     private final int maxStuckCycles;
 
-    private DefaultLivenessDetector(int maxStagnantCycles, int maxStuckCycles) {
-        this.maxStagnantCycles = maxStagnantCycles;
-        this.maxStuckCycles    = maxStuckCycles;
-    }
-
     /** Production defaults: stagnation after 3 cycles, stuck after 2. */
-    public static DefaultLivenessDetector withDefaults() {
-        return of(3, 2);
+    public DefaultLivenessDetector() {
+        this(3, 2);
     }
 
-    /** Factory with custom thresholds — validates arguments before constructing. */
-    public static DefaultLivenessDetector of(int maxStagnantCycles, int maxStuckCycles) {
+    @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
+    public DefaultLivenessDetector(int maxStagnantCycles, int maxStuckCycles) {
         if (maxStagnantCycles < 1) throw new IllegalArgumentException("maxStagnantCycles must be >= 1");
         if (maxStuckCycles < 1)    throw new IllegalArgumentException("maxStuckCycles must be >= 1");
-        return new DefaultLivenessDetector(maxStagnantCycles, maxStuckCycles);
+        this.maxStagnantCycles = maxStagnantCycles;
+        this.maxStuckCycles    = maxStuckCycles;
     }
 
     // ── N1: Stagnation ─────────────────────────────────────────────

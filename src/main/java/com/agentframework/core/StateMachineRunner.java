@@ -41,7 +41,7 @@ class StateMachineRunner {
 
     /** Default constructor: creates one TaintClassifier per runner instance. */
     StateMachineRunner(PlanValidator validator, EventSink events) {
-        this(validator, events, DefaultLivenessDetector.withDefaults(), new TaintClassifier());
+        this(validator, events, new DefaultLivenessDetector(), new TaintClassifier());
     }
 
     StateMachineRunner(PlanValidator validator, EventSink events,

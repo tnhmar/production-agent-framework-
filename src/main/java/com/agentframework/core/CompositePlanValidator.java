@@ -1,6 +1,7 @@
 package com.agentframework.core;
 
 import com.agentframework.foundation.*;
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.util.List;
 
 /**
@@ -9,37 +10,22 @@ import java.util.List;
  *
  * <p>Usage:
  * <pre>{@code
- *   PlanValidator v = CompositePlanValidator.of(
+ *   PlanValidator v = new CompositePlanValidator(List.of(
  *       new GoalCoherencePlanValidator(),
  *       new MyDomainPolicyValidator()
- *   );
+ *   ));
  *   new AgentRuntime(v, events);
  * }</pre>
- *
- * <p>Use the static factory {@link #of(List)} or {@link #of(PlanValidator...)} instead
- * of the constructor directly — validation is performed there so the constructor
- * never throws (avoids CT_CONSTRUCTOR_THROW).
  */
 public class CompositePlanValidator implements PlanValidator {
 
     private final List<PlanValidator> validators;
 
-    /** Use {@link #of(List)} or {@link #of(PlanValidator...)} instead. */
-    private CompositePlanValidator(List<PlanValidator> validators) {
-        this.validators = validators;
-    }
-
-    /** Factory — validates arguments before constructing. */
-    public static CompositePlanValidator of(List<PlanValidator> validators) {
+    @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
+    public CompositePlanValidator(List<PlanValidator> validators) {
         if (validators == null || validators.isEmpty())
             throw new IllegalArgumentException("At least one PlanValidator is required");
-        return new CompositePlanValidator(List.copyOf(validators));
-    }
-
-    /** Varargs convenience factory. */
-    @SafeVarargs
-    public static CompositePlanValidator of(PlanValidator... validators) {
-        return of(List.of(validators));
+        this.validators = List.copyOf(validators);
     }
 
     @Override

@@ -21,6 +21,10 @@
     <junit.version>5.11.0</junit.version>
     <mockito.version>5.12.0</mockito.version>
     <checkstyle.version>10.18.1</checkstyle.version>
+    <!-- All static-analysis tools skipped by default; CI jobs opt-in explicitly -->
+    <checkstyle.skip>true</checkstyle.skip>
+    <spotbugs.skip>true</spotbugs.skip>
+    <dependency-check.skip>true</dependency-check.skip>
   </properties>
 
   <dependencies>
@@ -92,7 +96,7 @@
         </configuration>
       </plugin>
 
-      <!-- Checkstyle: violations break the build -->
+      <!-- Checkstyle: disabled by default via ${checkstyle.skip} -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-checkstyle-plugin</artifactId>
@@ -110,12 +114,57 @@
             <phase>validate</phase>
             <goals><goal>check</goal></goals>
             <configuration>
+              <skip>${checkstyle.skip}</skip>
               <configLocation>google_checks.xml</configLocation>
               <consoleOutput>true</consoleOutput>
               <failsOnError>true</failsOnError>
               <violationSeverity>warning</violationSeverity>
               <includeTestSourceDirectory>false</includeTestSourceDirectory>
             </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- SpotBugs: disabled by default via ${spotbugs.skip} -->
+      <plugin>
+        <groupId>com.github.spotbugs</groupId>
+        <artifactId>spotbugs-maven-plugin</artifactId>
+        <version>4.8.6.4</version>
+        <configuration>
+          <skip>${spotbugs.skip}</skip>
+          <effort>Max</effort>
+          <threshold>Medium</threshold>
+          <failOnError>true</failOnError>
+          <sarifOutput>true</sarifOutput>
+        </configuration>
+        <executions>
+          <execution>
+            <id>spotbugs-check</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- OWASP Dependency-Check: disabled by default via ${dependency-check.skip} -->
+      <plugin>
+        <groupId>org.owasp</groupId>
+        <artifactId>dependency-check-maven</artifactId>
+        <version>10.0.3</version>
+        <configuration>
+          <skip>${dependency-check.skip}</skip>
+          <failBuildOnCVSS>7</failBuildOnCVSS>
+          <outputDirectory>${project.build.directory}/dependency-check</outputDirectory>
+          <formats>
+            <format>HTML</format>
+            <format>JSON</format>
+          </formats>
+        </configuration>
+        <executions>
+          <execution>
+            <id>dependency-check-analyze</id>
+            <phase>verify</phase>
+            <goals><goal>check</goal></goals>
           </execution>
         </executions>
       </plugin>

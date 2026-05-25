@@ -41,7 +41,7 @@ class StateMachineRunner {
 
     /** Default constructor: creates one TaintClassifier per runner instance. */
     StateMachineRunner(PlanValidator validator, EventSink events) {
-        this(validator, events, new DefaultLivenessDetector(), new TaintClassifier());
+        this(validator, events, DefaultLivenessDetector.withDefaults(), new TaintClassifier());
     }
 
     StateMachineRunner(PlanValidator validator, EventSink events,
@@ -145,9 +145,6 @@ class StateMachineRunner {
                         }
 
                         // ALWAYS record the cycle — including the terminal one.
-                        // Previously this was placed after an isLive() guard, which
-                        // caused the terminal cycle (FinalAnswer, Escalate) to never
-                        // be persisted, leaving cycleRecords empty and finalAnswer null.
                         ctx.recordCycle(CycleRecord.of(
                             ctx.cycleCount(), obs, decision, result, "ok"));
                         ctx.incrementCycle();

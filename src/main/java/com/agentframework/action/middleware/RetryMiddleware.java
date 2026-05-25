@@ -2,7 +2,6 @@ package com.agentframework.action.middleware;
 
 import com.agentframework.action.OperationalParams;
 import com.agentframework.foundation.ToolResult;
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.security.SecureRandom;
 import java.util.Random;
@@ -50,7 +49,6 @@ public class RetryMiddleware implements ToolMiddleware {
      * Full constructor — allows injecting {@code maxBackoffMs} and a seeded
      * {@link Random} for deterministic unit tests.
      */
-    @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
     public RetryMiddleware(int defaultMaxRetries, long baseBackoffMs,
                            long maxBackoffMs, Random jitterRandom) {
         if (defaultMaxRetries < 0)        throw new IllegalArgumentException("defaultMaxRetries must be >= 0");

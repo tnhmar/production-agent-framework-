@@ -6,7 +6,6 @@ import com.agentframework.foundation.FinalAnswer;
 import com.agentframework.foundation.ParallelToolCalls;
 import com.agentframework.foundation.TerminationReason;
 import com.agentframework.foundation.ToolCall;
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -44,7 +43,6 @@ public class DefaultLivenessDetector implements LivenessDetector {
         this(3, 2);
     }
 
-    @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
     public DefaultLivenessDetector(int maxStagnantCycles, int maxStuckCycles) {
         if (maxStagnantCycles < 1) throw new IllegalArgumentException("maxStagnantCycles must be >= 1");
         if (maxStuckCycles < 1)    throw new IllegalArgumentException("maxStuckCycles must be >= 1");

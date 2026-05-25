@@ -1,7 +1,6 @@
 package com.agentframework.core;
 
 import com.agentframework.foundation.*;
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.util.List;
 
 /**
@@ -21,7 +20,6 @@ public class CompositePlanValidator implements PlanValidator {
 
     private final List<PlanValidator> validators;
 
-    @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
     public CompositePlanValidator(List<PlanValidator> validators) {
         if (validators == null || validators.isEmpty())
             throw new IllegalArgumentException("At least one PlanValidator is required");

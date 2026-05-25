@@ -11,6 +11,7 @@ import com.agentframework.reasoning.*;
 import com.agentframework.reasoning.strategy.ReActStrategy;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 
@@ -49,7 +50,9 @@ class CoverageBoostTest {
 
     /** Produces a handle whose agent always terminates with ABORTED state. */
     private static AgentHandle.Local abortingHandle(String name) {
-        Agent a = agentWith(StubLLMProvider.abortingProvider());
+        // escalate() causes the ReAct strategy to produce an escalate decision,
+        // which drives the state machine into ABORTED state.
+        Agent a = agentWith(StubLLMProvider.escalate("force-abort"));
         AgentCard card = new AgentCard(name, "aborting agent", "1.0",
                 List.of(new Skill("s", name, "desc", List.of("test"))));
         return new AgentHandle.Local(runtime(), a, card);
@@ -103,7 +106,7 @@ class CoverageBoostTest {
                 .maxCycles(5)
                 .maxTokens(1000)
                 .maxWallClockTime(Duration.ofMinutes(2))
-                .budgetLimit(50.0)
+                .budgetLimit(BigDecimal.valueOf(50.0))
                 .build();
         List<AgentHandle> agents = List.of(successHandle("s1", "output1"));
         MultiAgentResult result = new PipelineOrchestrator().coordinate(
@@ -174,13 +177,13 @@ class CoverageBoostTest {
                 .maxCycles(10)
                 .maxTokens(500)
                 .maxWallClockTime(Duration.ofSeconds(30))
-                .budgetLimit(10.0)
+                .budgetLimit(BigDecimal.valueOf(10.0))
                 .build();
-        assertEquals("do it",         t.instruction());
-        assertEquals(10,              t.maxCycles());
-        assertEquals(500,             t.maxTokens());
-        assertEquals(Duration.ofSeconds(30), t.maxWallClockTime());
-        assertEquals(10.0,            t.budgetLimit(), 1e-9);
+        assertEquals("do it",                    t.instruction());
+        assertEquals(10,                         t.maxCycles());
+        assertEquals(500,                        t.maxTokens());
+        assertEquals(Duration.ofSeconds(30),     t.maxWallClockTime());
+        assertEquals(BigDecimal.valueOf(10.0),   t.budgetLimit());
     }
 
     // ── OrchestratorException: accessors ─────────────────────────────────────

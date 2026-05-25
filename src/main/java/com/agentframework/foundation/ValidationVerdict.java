@@ -7,6 +7,7 @@ public final class ValidationVerdict {
     /** Factory: creates a passing verdict. */
     public static ValidationVerdict ok()               { return new ValidationVerdict(true,null,false); }
     /** @deprecated use ok() */
+    @Deprecated(since = "1.0", forRemoval = false)
     public static ValidationVerdict passed()           { return ok(); }
     public static ValidationVerdict failed(String r)   { return new ValidationVerdict(false,r,false); }
     public static ValidationVerdict requireApproval(String r){ return new ValidationVerdict(false,r,true); }

@@ -119,7 +119,9 @@ public final class InMemoryProceduralStore implements ProceduralStore {
         Map<String, WorkflowTemplate> versions = byId.get(templateId);
         if (versions == null || !versions.containsKey(version)) return false;
 
-        WorkflowTemplate removed = versions.remove(version);
+        // Fix DLS_DEAD_LOCAL_STORE: do not capture the return value — the
+        // side-effect of removal from the map is all that is needed here.
+        versions.remove(version);
         if (versions.isEmpty()) byId.remove(templateId);
 
         // Remove from taskType index if this was the latest for that type

@@ -24,23 +24,23 @@ import java.util.List;
  */
 public final class PineconeVectorStore implements VectorStore {
 
-    private static final String PATH_UPSERT    = "/vectors/upsert";
-    private static final String PATH_QUERY     = "/query";
-    private static final String PATH_FETCH     = "/vectors/fetch?ids=";
-    private static final String PATH_DELETE    = "/vectors/delete";
+    private static final String PATH_UPSERT        = "/vectors/upsert";
+    private static final String PATH_QUERY         = "/query";
+    private static final String PATH_FETCH         = "/vectors/fetch?ids=";
+    private static final String PATH_DELETE        = "/vectors/delete";
 
-    private static final String FIELD_VECTORS          = "vectors";
-    private static final String FIELD_NAMESPACE        = "namespace";
-    private static final String FIELD_ID               = "id";
-    private static final String FIELD_VALUES           = "values";
-    private static final String FIELD_METADATA         = "metadata";
-    private static final String FIELD_PAYLOAD          = "payload";
-    private static final String FIELD_TOP_K            = "topK";
-    private static final String FIELD_VECTOR           = "vector";
-    private static final String FIELD_INCLUDE_META     = "includeMetadata";
-    private static final String FIELD_MATCHES          = "matches";
-    private static final String FIELD_SCORE            = "score";
-    private static final String FIELD_IDS              = "ids";
+    private static final String FIELD_VECTORS      = "vectors";
+    private static final String FIELD_NAMESPACE    = "namespace";
+    private static final String FIELD_ID           = "id";
+    private static final String FIELD_VALUES       = "values";
+    private static final String FIELD_METADATA     = "metadata";
+    private static final String FIELD_PAYLOAD      = "payload";
+    private static final String FIELD_TOP_K        = "topK";
+    private static final String FIELD_VECTOR       = "vector";
+    private static final String FIELD_INCLUDE_META = "includeMetadata";
+    private static final String FIELD_MATCHES      = "matches";
+    private static final String FIELD_SCORE        = "score";
+    private static final String FIELD_IDS          = "ids";
 
     private final StoreConfig    config;
     private final JsonHttpClient http;
@@ -49,7 +49,6 @@ public final class PineconeVectorStore implements VectorStore {
     public PineconeVectorStore(StoreConfig config) {
         this.config = config;
         this.http   = new JsonHttpClient(config.policy());
-        // Pinecone requires "Api-Key" header, not "Authorization: Bearer"
         this.auth   = AuthStrategy.pineconeApiKey(config.apiKey());
     }
 
@@ -57,7 +56,6 @@ public final class PineconeVectorStore implements VectorStore {
     public void insert(String id, List<Double> embedding, String payload,
                        RequestContext ctx) {
         ObjectNode body = http.newObject();
-        // vectors must be wrapped in an array
         ArrayNode vectors = body.putArray(FIELD_VECTORS);
         ObjectNode vec = vectors.addObject();
         vec.put(FIELD_ID, id);
@@ -65,27 +63,25 @@ public final class PineconeVectorStore implements VectorStore {
         embedding.forEach(vals::add);
         ObjectNode meta = vec.putObject(FIELD_METADATA);
         meta.put(FIELD_PAYLOAD, payload);
-        // namespace from config
         body.put(FIELD_NAMESPACE, config.namespace());
-
         http.post(config.host() + PATH_UPSERT, body, auth);
     }
 
     @Override
     public List<Neighbor> search(List<Double> query, int k, RequestContext ctx) {
         ObjectNode body = http.newObject();
-        body.put(FIELD_TOP_K, k);
-        body.put(FIELD_INCLUDE_META, true);   // required — without this payload is null
-        body.put(FIELD_NAMESPACE, config.namespace());
+        body.put(FIELD_TOP_K,        k);
+        body.put(FIELD_INCLUDE_META, true);
+        body.put(FIELD_NAMESPACE,    config.namespace());
         ArrayNode vec = body.putArray(FIELD_VECTOR);
         query.forEach(vec::add);
 
         JsonNode response = http.post(config.host() + PATH_QUERY, body, auth);
         List<Neighbor> neighbors = new ArrayList<>();
         for (JsonNode match : response.path(FIELD_MATCHES)) {
-            String  nid     = match.path(FIELD_ID).asText();
-            double  score   = match.path(FIELD_SCORE).asDouble();
-            String  text    = match.path(FIELD_METADATA).path(FIELD_PAYLOAD).asText();
+            String nid   = match.path(FIELD_ID).asText();
+            double score = match.path(FIELD_SCORE).asDouble();
+            String text  = match.path(FIELD_METADATA).path(FIELD_PAYLOAD).asText();
             neighbors.add(new Neighbor(nid, score, text));
         }
         return List.copyOf(neighbors);
@@ -101,12 +97,10 @@ public final class PineconeVectorStore implements VectorStore {
 
     @Override
     public String getPayload(String id, RequestContext ctx) {
-        // URL-encode the id to prevent query-string injection
         String url = config.host() + PATH_FETCH
                 + URLEncoder.encode(id, StandardCharsets.UTF_8)
                 + "&namespace=" + URLEncoder.encode(config.namespace(), StandardCharsets.UTF_8);
         JsonNode response = http.get(url, auth);
-        // Correct path: vectors -> {id} -> metadata -> payload
         return response
                 .path(FIELD_VECTORS).path(id)
                 .path(FIELD_METADATA).path(FIELD_PAYLOAD)

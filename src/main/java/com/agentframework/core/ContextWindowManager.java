@@ -18,8 +18,13 @@ package com.agentframework.core;
  *       throws {@link IllegalArgumentException} on out-of-range input.</li>
  *   <li>{@link #withThreshold(double)} static factory for fluent construction.</li>
  * </ul>
+ *
+ * <p>Declared {@code final}: this is a leaf utility class not designed for
+ * extension. {@code final} also eliminates the SpotBugs CT_CONSTRUCTOR_THROW
+ * finalizer-attack vector that arises when a constructor throws in a
+ * non-final class.
  */
-public class ContextWindowManager {
+public final class ContextWindowManager {
 
     /** Default fraction of the token budget at which eviction is triggered. */
     public static final double DEFAULT_EVICTION_THRESHOLD = 0.70;

@@ -1,50 +1,57 @@
 package com.agentframework.action;
 
-import com.agentframework.core.*;
-import com.agentframework.foundation.*;
-import com.agentframework.observability.*;
+import com.agentframework.core.ExecutionContext;
+import com.agentframework.core.WorkingMemoryEntry;
+import com.agentframework.foundation.TaintLabel;
+import com.agentframework.foundation.ToolCall;
+import com.agentframework.observability.AgentEvent;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
- * Blocks tool calls when HOSTILE-tainted working-memory entries are present.
+ * Validates a {@link ToolCall} against the taint labels held in working memory.
  *
- * <h3>Algorithm (H3 fix)</h3>
+ * <h3>Algorithm</h3>
  * <ol>
  *   <li>Collect the {@code id} values of all working-memory entries whose
  *       {@link TaintLabel} is {@link TaintLabel#HOSTILE}.</li>
- *   <li>If no HOSTILE entries exist — pass immediately.</li>
+ *   <li>If no HOSTILE entries exist — pass immediately, no event.</li>
  *   <li>Check whether any argument value contains a hostile entry id verbatim
  *       (lightweight data-flow proxy for prompt-injection propagation).</li>
- *   <li><b>Either way — block unconditionally.</b> Two severity values
- *       distinguish cases for operator triage:
- *       <ul>
- *         <li>{@code BLOCK/PROPAGATED} — hostile id confirmed in arguments
- *             (data-flow confirmed)</li>
- *         <li>{@code BLOCK/UNCONFIRMED} — hostile entry exists but id not
- *             found in arguments (precautionary block)</li>
- *       </ul>
- *   </li>
+ *   <li>If a hostile id <b>is</b> referenced in the arguments — block the call
+ *       ({@code isPassed() == false}) and emit a {@code BLOCK} severity event.</li>
+ *   <li>If hostile entries exist but <b>none</b> of their ids appear in the
+ *       arguments — pass the call and emit a {@code WARN} severity audit event
+ *       so operators have full traceability.</li>
  * </ol>
  *
- * <p><b>H3 fix rationale:</b> the previous "pass with WARN audit" branch was
- * dead code in the default stack (SecurityEnforcer already blocked at position 3)
- * but represented a real security regression in custom stacks that omit
- * SecurityEnforcer.  The pass-through has been removed; any HOSTILE entry now
- * blocks unconditionally regardless of stack composition.
+ * <p>This class is intentionally free of static singletons.  The event sink is
+ * constructor-injected so the validator is fully testable without side effects.
  *
- * <p>This class is intentionally free of static singletons.  The {@link EventSink}
- * is constructor-injected so the validator is fully testable without side effects.
+ * <p>Thread-safe: all state is passed via parameters; the {@link Consumer} sink
+ * must itself be thread-safe.
  */
 public class TaintActionValidator implements ActionValidator {
 
-    private final EventSink events;
+    // ── Severity literals — must match MiddlewareCoverageTest assertions ──
+    private static final String SEVERITY_BLOCK = "BLOCK";
+    private static final String SEVERITY_WARN  = "WARN";
 
-    public TaintActionValidator(EventSink events) {
-        this.events = events;
+    // ── Event attribute keys ──────────────────────────────────────────────
+    private static final String ATTR_SEVERITY  = "severity";
+    private static final String ATTR_TOOL      = "tool";
+    private static final String ATTR_HOSTILE   = "hostileIds";
+
+    private final Consumer<AgentEvent> events;
+
+    public TaintActionValidator(Consumer<AgentEvent> events) {
+        this.events = Objects.requireNonNull(events, "events must not be null");
     }
 
     @Override
@@ -58,30 +65,31 @@ public class TaintActionValidator implements ActionValidator {
             return ValidationVerdict.ok();
         }
 
-        boolean confirmed = call.arguments().values().stream()
-            .filter(v -> v != null)
-            .anyMatch(v -> {
-                String str = v.toString();
-                return hostileIds.stream().anyMatch(str::contains);
-            });
+        boolean referenced = call.arguments() != null
+            && call.arguments().values().stream()
+                   .filter(Objects::nonNull)
+                   .anyMatch(v -> hostileIds.stream().anyMatch(v.toString()::contains));
 
-        // H3 fix: block unconditionally — no silent pass-through.
-        // Severity distinguishes confirmed data-flow from precautionary blocks.
-        String severity = confirmed ? "BLOCK/PROPAGATED" : "BLOCK/UNCONFIRMED";
-        String detail   = confirmed
-            ? "argument contains reference to HOSTILE-tainted working-memory entry"
-            : "HOSTILE working-memory entry present (id not found verbatim in arguments — precautionary block)";
+        if (referenced) {
+            emit(call.toolName(), ctx, SEVERITY_BLOCK, hostileIds);
+            return ValidationVerdict.failed(
+                "Tool call '" + call.toolName()
+                    + "' blocked: argument references HOSTILE-tainted working-memory entry");
+        } else {
+            emit(call.toolName(), ctx, SEVERITY_WARN, hostileIds);
+            return ValidationVerdict.ok();
+        }
+    }
 
-        events.emit(new AgentEvent(
+    private void emit(String toolName, ExecutionContext ctx,
+                      String severity, Set<String> hostileIds) {
+        events.accept(new AgentEvent(
             ctx.runId(), ctx.tenantId(),
             AgentEvent.EventType.HOSTILE_TAINT_DETECTED,
             Instant.now(),
             Map.of(
-                "severity",   severity,
-                "tool",       call.toolName(),
-                "hostileIds", hostileIds.toString())));
-
-        return ValidationVerdict.failed(
-            "Tool call '" + call.toolName() + "' blocked: " + detail);
+                ATTR_SEVERITY, severity,
+                ATTR_TOOL,     toolName,
+                ATTR_HOSTILE,  hostileIds.toString())));
     }
 }

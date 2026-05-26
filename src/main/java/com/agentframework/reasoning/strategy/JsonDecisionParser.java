@@ -92,7 +92,7 @@ public final class JsonDecisionParser {
 
         if (type == null)
             return escalate(Severity.HIGH,
-                "Unknown decision type: " + typeRaw);
+                "Unknown type: " + typeRaw);
 
         return switch (type) {
             case TOOL_CALL -> {

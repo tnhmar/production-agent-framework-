@@ -1,10 +1,8 @@
 package com.agentframework.action;
 
-import com.agentframework.action.middleware.ValidationVerdict;
 import com.agentframework.core.ExecutionContext;
 import com.agentframework.core.WorkingMemoryEntry;
-import com.agentframework.foundation.TaintLabel;
-import com.agentframework.foundation.ToolCall;
+import com.agentframework.foundation.*;
 import com.agentframework.observability.AgentEvent;
 import com.agentframework.observability.EventSink;
 
@@ -41,7 +39,7 @@ public class TaintActionValidator implements ActionValidator {
     private static final String SEVERITY_BLOCK = "BLOCK";
     private static final String SEVERITY_WARN  = "WARN";
 
-    // ── Event attribute keys ─────────────────────────────────────
+    // ── Event attribute keys ──────────────────────────────────────────────
     private static final String ATTR_SEVERITY  = "severity";
     private static final String ATTR_TOOL      = "tool";
     private static final String ATTR_HOSTILE   = "hostileIds";

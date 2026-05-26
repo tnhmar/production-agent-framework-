@@ -3,7 +3,6 @@ package com.agentframework.reasoning;
 import com.agentframework.core.ExecutionContext;
 import com.agentframework.foundation.Decision;
 import com.agentframework.foundation.Observations;
-import com.agentframework.foundation.Prompt;
 
 /**
  * {@link Reasoning} implementation that delegates to a {@link ReasoningStrategy}

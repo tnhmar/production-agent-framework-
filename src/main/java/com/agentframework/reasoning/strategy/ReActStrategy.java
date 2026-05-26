@@ -1,8 +1,8 @@
 package com.agentframework.reasoning.strategy;
 
 import com.agentframework.foundation.Decision;
-import com.agentframework.foundation.LLMProvider;
-import com.agentframework.foundation.Prompt;
+import com.agentframework.reasoning.LLMProvider;
+import com.agentframework.reasoning.Prompt;
 import com.agentframework.reasoning.ReasoningStrategy;
 
 /**

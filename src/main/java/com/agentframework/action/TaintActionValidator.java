@@ -1,17 +1,17 @@
 package com.agentframework.action;
 
+import com.agentframework.action.middleware.ValidationVerdict;
 import com.agentframework.core.ExecutionContext;
 import com.agentframework.core.WorkingMemoryEntry;
 import com.agentframework.foundation.TaintLabel;
 import com.agentframework.foundation.ToolCall;
 import com.agentframework.observability.AgentEvent;
+import com.agentframework.observability.EventSink;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -31,11 +31,9 @@ import java.util.stream.Collectors;
  *       so operators have full traceability.</li>
  * </ol>
  *
- * <p>This class is intentionally free of static singletons.  The event sink is
- * constructor-injected so the validator is fully testable without side effects.
- *
- * <p>Thread-safe: all state is passed via parameters; the {@link Consumer} sink
- * must itself be thread-safe.
+ * <p>The {@link EventSink} is constructor-injected so the validator is fully
+ * testable without side effects.  Thread-safe: all state is passed via
+ * parameters; the sink must itself be thread-safe.
  */
 public class TaintActionValidator implements ActionValidator {
 
@@ -43,14 +41,14 @@ public class TaintActionValidator implements ActionValidator {
     private static final String SEVERITY_BLOCK = "BLOCK";
     private static final String SEVERITY_WARN  = "WARN";
 
-    // ── Event attribute keys ──────────────────────────────────────────────
+    // ── Event attribute keys ─────────────────────────────────────
     private static final String ATTR_SEVERITY  = "severity";
     private static final String ATTR_TOOL      = "tool";
     private static final String ATTR_HOSTILE   = "hostileIds";
 
-    private final Consumer<AgentEvent> events;
+    private final EventSink events;
 
-    public TaintActionValidator(Consumer<AgentEvent> events) {
+    public TaintActionValidator(EventSink events) {
         this.events = Objects.requireNonNull(events, "events must not be null");
     }
 
@@ -83,7 +81,7 @@ public class TaintActionValidator implements ActionValidator {
 
     private void emit(String toolName, ExecutionContext ctx,
                       String severity, Set<String> hostileIds) {
-        events.accept(new AgentEvent(
+        events.emit(new AgentEvent(
             ctx.runId(), ctx.tenantId(),
             AgentEvent.EventType.HOSTILE_TAINT_DETECTED,
             Instant.now(),

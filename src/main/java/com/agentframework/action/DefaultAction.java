@@ -15,19 +15,26 @@ import java.util.concurrent.*;
  * Default {@link Action} implementation wiring a 5-layer validation stack,
  * middleware pipeline, and parallel fan-out executor.
  *
- * <h3>Validation stack (in order)</h3>
+ * <h3>Validation stack order (C3 fix — spec Vol. 1, Ch. 7)</h3>
  * <ol>
  *   <li>{@link SchemaActionValidator}   — arity and type checks</li>
  *   <li>{@link SemanticActionValidator} — semantic consistency</li>
- *   <li>{@link SafetyActionValidator}   — pre-execution approval gate</li>
- *   <li>{@link SecurityEnforcer}        — policy hard-fail</li>
+ *   <li>{@link SecurityEnforcer}        — policy hard-fail (FAILED) — must run
+ *       <em>before</em> SafetyActionValidator so policy-blocked calls are
+ *       rejected outright rather than pausing for operator approval</li>
+ *   <li>{@link SafetyActionValidator}   — pre-execution approval gate
+ *       (REQUIRE_APPROVAL) — runs after policy so approval is only requested
+ *       for calls that policy has already permitted</li>
  *   <li>{@link TaintActionValidator}    — HOSTILE taint propagation block</li>
  * </ol>
  *
- * <p><b>DA-1 fix:</b> {@link #executeParallel} now calls
+ * <p><b>DA-1 fix:</b> {@link #executeParallel} calls
  * {@link SecurityEnforcer#validateParallel} before the fan-out, enforcing
- * hostile-taint and irreversible-action checks for parallel batches (IC6
- * integration).
+ * hostile-taint and irreversible-action checks for parallel batches.
+ *
+ * <p><b>M4 fix:</b> thread-pool creation is centralised in
+ * {@link #newDefaultExecutor()} — {@code newFixedThreadPool} appears exactly
+ * once in this file.
  */
 public class DefaultAction implements Action, AutoCloseable {
 
@@ -44,11 +51,16 @@ public class DefaultAction implements Action, AutoCloseable {
      */
     private final SecurityEnforcer securityEnforcer;
 
+    // ── Factory ─────────────────────────────────────────────────────────────
+
     /**
-     * Canonical factory — wires the full validation stack.
+     * Canonical factory — wires the full validation stack in the order
+     * mandated by spec Vol. 1, Ch. 7 (C3 fix).
      *
-     * @param eventSink the shared event sink used throughout the framework;
-     *                  forwarded to {@link TaintActionValidator} for audit events.
+     * <p>Stack order: Schema → Semantic → Policy ({@link SecurityEnforcer})
+     * → Safety ({@link SafetyActionValidator}) → Taint
+     *
+     * @param eventSink the shared event sink forwarded to {@link TaintActionValidator}.
      */
     public static DefaultAction withDefaultValidators(
             ToolRegistry registry,
@@ -60,39 +72,41 @@ public class DefaultAction implements Action, AutoCloseable {
             List.of(
                 new SchemaActionValidator(),
                 new SemanticActionValidator(),
-                new SafetyActionValidator(),
-                securityEnforcer,
+                securityEnforcer,               // position 3 — C3 fix: policy before safety
+                new SafetyActionValidator(),    // position 4 — C3 fix: safety after policy
                 new TaintActionValidator(eventSink)),
             middleware, dispatcher, securityEnforcer);
     }
 
+    // ── Constructors ─────────────────────────────────────────────────────────
+
+    /**
+     * Short constructor — no {@link SecurityEnforcer}.
+     * Delegates to canonical 6-arg form via {@link #newDefaultExecutor()} (M4 fix).
+     */
     public DefaultAction(ToolRegistry registry, List<ActionValidator> validators,
                          ToolMiddleware middleware, ToolDispatcher dispatcher) {
-        this(registry, validators, middleware, dispatcher,
-            Executors.newFixedThreadPool(4, r -> {
-                Thread t = new Thread(r, "tool-exec");
-                t.setDaemon(true);
-                return t;
-            }), null);
+        this(registry, validators, middleware, dispatcher, newDefaultExecutor(), null);
     }
 
+    /**
+     * Short constructor — with {@link SecurityEnforcer}.
+     * Delegates to canonical 6-arg form via {@link #newDefaultExecutor()} (M4 fix).
+     */
     public DefaultAction(ToolRegistry registry, List<ActionValidator> validators,
                          ToolMiddleware middleware, ToolDispatcher dispatcher,
                          SecurityEnforcer securityEnforcer) {
-        this(registry, validators, middleware, dispatcher,
-            Executors.newFixedThreadPool(4, r -> {
-                Thread t = new Thread(r, "tool-exec");
-                t.setDaemon(true);
-                return t;
-            }), securityEnforcer);
+        this(registry, validators, middleware, dispatcher, newDefaultExecutor(), securityEnforcer);
     }
 
+    /** Short constructor — custom executor, no {@link SecurityEnforcer}. */
     public DefaultAction(ToolRegistry registry, List<ActionValidator> validators,
                          ToolMiddleware middleware, ToolDispatcher dispatcher,
                          ExecutorService executor) {
         this(registry, validators, middleware, dispatcher, executor, null);
     }
 
+    /** Canonical 6-arg constructor — all other constructors delegate here. */
     public DefaultAction(ToolRegistry registry, List<ActionValidator> validators,
                          ToolMiddleware middleware, ToolDispatcher dispatcher,
                          ExecutorService executor, SecurityEnforcer securityEnforcer) {
@@ -103,6 +117,23 @@ public class DefaultAction implements Action, AutoCloseable {
         this.executor         = executor;
         this.securityEnforcer = securityEnforcer;
     }
+
+    // ── Private factory — M4 fix ─────────────────────────────────────────────
+
+    /**
+     * Creates the default fixed thread pool used by short constructors.
+     * Centralised here so pool size, thread name, and daemon flag are
+     * maintained in exactly one place (M4 fix — DRY).
+     */
+    private static ExecutorService newDefaultExecutor() {
+        return Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "tool-exec");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
+    // ── Public API ───────────────────────────────────────────────────────────
 
     public ActionResult execute(Decision decision, ExecutionContext ctx) {
         return switch (decision) {
@@ -122,6 +153,8 @@ public class DefaultAction implements Action, AutoCloseable {
     public void close() {
         executor.shutdownNow();
     }
+
+    // ── Private helpers ──────────────────────────────────────────────────────
 
     private ActionResult executeToolCall(ToolCall tc, ExecutionContext ctx) {
         ToolContract contract = registry.lookup(tc.toolName());
@@ -154,14 +187,12 @@ public class DefaultAction implements Action, AutoCloseable {
     private ActionResult executeParallel(ParallelToolCalls p, ExecutionContext ctx) {
         List<ToolCall> calls = p.calls();
 
-        // DA-1 fix: batch-level security check via SecurityEnforcer.validateParallel
         if (securityEnforcer != null) {
             ValidationVerdict sv = securityEnforcer.validateParallel(
                 calls, registry::lookup, ctx);
             if (!sv.isPassed()) return ActionResult.validationFailure(sv);
         }
 
-        // Per-call validation through the full validator chain
         for (ToolCall tc : calls) {
             ToolContract c = registry.lookup(tc.toolName());
             if (c == null) return ActionResult.failure("UNKNOWN_TOOL", tc.toolName());
@@ -187,8 +218,6 @@ public class DefaultAction implements Action, AutoCloseable {
         long             start    = System.currentTimeMillis();
 
         for (int i = 0; i < futures.size(); i++) {
-            // DA-3 improvement: use remaining wall-clock time rather than resetting
-            // the full deadline per future, capping at 1 ms to avoid negative timeouts.
             long elapsed   = System.currentTimeMillis() - start;
             long remaining = Math.max(1L, deadline - elapsed);
             try {

@@ -23,14 +23,20 @@ import java.util.UUID;
  *                               → TERMINATED / COMPLETED / ABORTED
  * </pre>
  *
- * <p><b>Fix — cycle record ordering</b>: {@code recordCycle()} and
- * {@code incrementCycle()} are now called <em>unconditionally</em> at the end of
- * every PLANNING step, <em>before</em> the {@code isLive()} guard that returns
- * early on terminal state.  Previously the record was skipped whenever
- * {@link Review} transitioned the context to a terminal state (COMPLETED /
- * TERMINATED) during the same cycle — causing {@link ExecutionResult#cycleRecords()}
- * to be empty and {@link ExecutionResult#finalAnswer()} to return {@code null}
- * for every terminal cycle including a direct {@link FinalAnswer}.
+ * <p><b>C4 fix — DEGRADED must transition to ABORTED, not TERMINATED</b>:
+ * The spec (Vol. 1, Ch. 8) states: "There is no transition from DEGRADED
+ * directly to TERMINATED — a degraded run must either recover or be explicitly
+ * aborted."  A dedicated {@link #abort(ExecutionContext, TerminationReason,
+ * AgentEvent.EventType, Map)} method now sets {@link RunState#ABORTED}.
+ * The {@code DEGRADED} switch case calls {@code abort()} instead of
+ * {@code terminate()}, eliminating the state/event contradiction where the
+ * state said {@code TERMINATED} but the event said {@code RUN_ABORTED}.
+ *
+ * <p><b>Cycle record ordering fix:</b> {@code recordCycle()} and
+ * {@code incrementCycle()} are called unconditionally at the end of every
+ * PLANNING step, before the {@code isLive()} guard that returns early on
+ * terminal state.  Previously the record was skipped whenever {@link Review}
+ * transitioned the context to a terminal state during the same cycle.
  */
 class StateMachineRunner {
 
@@ -112,7 +118,6 @@ class StateMachineRunner {
                 Decision     decision = agent.reasoning().decide(ctx, obs);
                 ctx.transitionTo(RunState.PLANNING);
 
-                // N2: stuck-state check
                 liveness.checkStuck(decision, ctx).ifPresent(reason -> {
                     terminate(ctx, reason,
                         AgentEvent.EventType.STUCK_STATE_DETECTED,
@@ -128,12 +133,9 @@ class StateMachineRunner {
                         ctx.transitionTo(RunState.TOOL_EXECUTION);
                         ActionResult result = agent.action().execute(decision, ctx);
                         ctx.transitionTo(RunState.MEMORY_UPDATE);
-                        // Pass injected taintClassifier — not constructed inline
                         new Review(validator, events, taintClassifier)
                             .step(result, decision, obs, ctx, agent);
 
-                        // N1: stagnation check (runs even on terminal cycles so the
-                        // hash is computed, but we only fire if still live).
                         String postGoalHash = DefaultLivenessDetector.hashGoalState(
                             ctx.goalStack().all());
                         if (ctx.currentState().isLive()) {
@@ -144,7 +146,6 @@ class StateMachineRunner {
                                            "goalHash", postGoalHash)));
                         }
 
-                        // ALWAYS record the cycle — including the terminal one.
                         ctx.recordCycle(CycleRecord.of(
                             ctx.cycleCount(), obs, decision, result, "ok"));
                         ctx.incrementCycle();
@@ -184,7 +185,10 @@ class StateMachineRunner {
                     Map.of("state", ctx.currentState().name()));
             }
 
-            case DEGRADED -> terminate(ctx,
+            // C4 fix: DEGRADED must transition to ABORTED (not TERMINATED).
+            // Spec Vol. 1 Ch. 8: "There is no transition from DEGRADED directly
+            // to TERMINATED — a degraded run must either recover or be explicitly aborted."
+            case DEGRADED -> abort(ctx,
                 new TerminationReason.FailureEscalation("Agent entered DEGRADED state"),
                 AgentEvent.EventType.RUN_ABORTED, Map.of());
 
@@ -210,6 +214,23 @@ class StateMachineRunner {
         return null;
     }
 
+    /**
+     * C4 fix: transitions to {@link RunState#ABORTED} — used for DEGRADED
+     * state escalation.  The spec forbids a direct DEGRADED → TERMINATED
+     * transition; a degraded run must be explicitly aborted.
+     */
+    private void abort(ExecutionContext ctx, TerminationReason reason,
+                       AgentEvent.EventType eventType, Map<String, Object> attrs) {
+        ctx.setTerminationReason(reason);
+        ctx.transitionTo(RunState.ABORTED);   // C4 fix: ABORTED, not TERMINATED
+        emit(ctx, eventType, attrs);
+    }
+
+    /**
+     * Transitions to {@link RunState#TERMINATED} — used for resource limits,
+     * hostile taint blocks, stuck states, plan incoherence, and delegation
+     * depth exceeded.
+     */
     private void terminate(ExecutionContext ctx, TerminationReason reason,
                            AgentEvent.EventType eventType, Map<String, Object> attrs) {
         ctx.setTerminationReason(reason);

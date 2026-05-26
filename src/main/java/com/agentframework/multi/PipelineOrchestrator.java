@@ -14,6 +14,16 @@ import java.util.*;
  * forwarding a blank instruction to the next agent — a blank instruction is
  * indistinguishable from a silent failure and would cause the downstream
  * agent to operate with no meaningful input.
+ *
+ * <h3>Failure detection (C1 fix)</h3>
+ * <p>{@link #isFailure(RunState)} now includes {@link RunState#TERMINATED} in
+ * addition to {@code ABORTED} and {@code DEGRADED}, matching
+ * {@code SupervisorOrchestrator.isFailure()}.  Previously a sub-agent that
+ * exited in {@code TERMINATED} state (hostile taint block, resource exhaustion,
+ * consecutive failures, plan incoherence) was not detected as a failure; the
+ * pipeline then attempted to read {@code r.finalAnswer()}, received {@code null},
+ * and threw {@code PipelineAbortException("BLANK_OUTPUT")} — hiding the real
+ * termination reason in logs and dashboards.
  */
 public class PipelineOrchestrator implements AgentOrchestrator {
 
@@ -80,7 +90,18 @@ public class PipelineOrchestrator implements AgentOrchestrator {
         return new MultiAgentResult(allResults, agents, ctx.runId(), traces);
     }
 
+    /**
+     * Returns {@code true} when the sub-agent run state represents a failure
+     * that should abort the pipeline.
+     *
+     * <p>Includes {@link RunState#TERMINATED} (C1 fix) so that sub-agents
+     * exiting via hostile-taint blocks, resource exhaustion, consecutive
+     * failures, or plan incoherence are correctly surfaced as pipeline failures
+     * rather than being masked as blank-output errors.
+     */
     private static boolean isFailure(RunState state) {
-        return state == RunState.ABORTED || state == RunState.DEGRADED;
+        return state == RunState.ABORTED
+            || state == RunState.DEGRADED
+            || state == RunState.TERMINATED;  // C1 fix
     }
 }

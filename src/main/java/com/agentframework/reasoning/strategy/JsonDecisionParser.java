@@ -55,7 +55,7 @@ public final class JsonDecisionParser {
     private static final String FIELD_CONTENT         = "content";
 
     // ── Fallback literals ──────────────────────────────────────────────────
-    private static final String DEFAULT_CLARIFICATION = "Please clarify the goal.";
+    private static final String DEFAULT_CLARIFICATION = "Please clarify.";
     private static final String DEFAULT_TOOL_NAME     = "unknown";
     private static final String EMPTY_TRACE           = "";
     private static final String EMPTY_JSON_OBJ        = "{}";
@@ -163,12 +163,12 @@ public final class JsonDecisionParser {
         argsNode.fields().forEachRemaining(entry -> {
             JsonNode v = entry.getValue();
             Object   val;
-            if      (v.isTextual())          val = v.asText();
-            else if (v.isBoolean())          val = v.asBoolean();
-            else if (v.isIntegralNumber())   val = v.longValue();
-            else if (v.isFloatingPointNumber()) val = v.doubleValue();
+            if      (v.isTextual())              val = v.asText();
+            else if (v.isBoolean())              val = v.asBoolean();
+            else if (v.isIntegralNumber())        val = v.longValue();
+            else if (v.isFloatingPointNumber())   val = v.doubleValue();
             else if (v.isArray() || v.isObject()) val = v.toString();
-            else                             val = v.asText();
+            else                                  val = v.asText();
             map.put(entry.getKey(), val);
         });
         return Collections.unmodifiableMap(map);

@@ -1,0 +1,911 @@
+%!TEX program = xelatex
+
+
+
+
+
+\documentclass[
+  11pt,
+  twoside,
+  openright
+]{book}
+
+
+\usepackage{polyglossia}
+\setdefaultlanguage{english}
+
+\usepackage{fontspec}
+\setmainfont{TeX Gyre Termes}[
+  BoldFont   = TeX Gyre Termes Bold,
+  ItalicFont = TeX Gyre Termes Italic
+]
+\setsansfont{TeX Gyre Heros}[
+  BoldFont   = TeX Gyre Heros Bold,
+  ItalicFont = TeX Gyre Heros Italic
+]
+
+\setmonofont{TeX Gyre Cursor}[
+  Scale    = 0.88,
+  BoldFont = TeX Gyre Cursor Bold
+]
+
+\usepackage{geometry}
+\geometry{
+  papersize  = {7in, 10in},
+  top        = 1in,
+  bottom     = 1.1in,
+  inner      = 1in,
+  outer      = 0.875in,
+  headheight = 14pt,
+  twoside
+}
+
+\usepackage{xcolor}
+\definecolor{BookBlue}       {HTML}{1A4A8A}
+\definecolor{BookDark}       {HTML}{1C1C1E}
+\definecolor{BookMid}        {HTML}{4A4A4A}
+\definecolor{LearnBg}        {HTML}{EEF7EE}
+\definecolor{LearnBorder}    {HTML}{27AE60}
+\definecolor{TipBg}          {HTML}{EAF4FB}
+\definecolor{TipBorder}      {HTML}{2980B9}
+\definecolor{WarningBg}      {HTML}{FEF9E7}
+\definecolor{WarningBorder}  {HTML}{F39C12}
+\definecolor{NoteBg}         {HTML}{F4F4F4}
+\definecolor{NoteBorder}     {HTML}{888888}
+\definecolor{TakeawayBg}     {HTML}{F0F0FF}
+\definecolor{TakeawayBorder} {HTML}{5B4FBE}
+\definecolor{CodeBg}         {HTML}{F7F7F7}
+\definecolor{CodeComment}    {HTML}{6A737D}
+\definecolor{CodeKeyword}    {HTML}{D73A49}
+\definecolor{CodeString}     {HTML}{032F62}
+\definecolor{CodeConstant}   {HTML}{005CC5}
+\definecolor{CodeAnnotation} {HTML}{6A737D}
+
+\usepackage{microtype}
+\usepackage{setspace}
+\setstretch{1.18}
+
+\usepackage{csquotes}
+\usepackage{parskip}
+\setlength{\parskip}{6pt}
+\setlength{\parindent}{0pt}
+
+\widowpenalty=10000
+\clubpenalty=10000
+\displaywidowpenalty=10000
+\predisplaypenalty=10000
+\raggedbottom
+\emergencystretch=1.5em
+\hbadness=3000
+\vbadness=3000
+
+\usepackage{needspace}
+\usepackage{etoolbox}
+\preto\section{\needspace{5\baselineskip}}
+\preto\subsection{\needspace{4\baselineskip}}
+\preto\subsubsection{\needspace{3\baselineskip}}
+
+\usepackage{titlesec}
+\renewcommand{\bottomtitlespace}{0.15\textheight}
+
+\titleformat{\part}[display]
+  {\centering\sffamily\Huge\bfseries\color{BookBlue}}
+  {\sffamily\large\mdseries\partname\ \thepart}{20pt}{}
+
+\titleformat{\chapter}[display]
+  {\sffamily\huge\bfseries\color{BookBlue}}
+  {\sffamily\normalsize\mdseries\chaptertitlename\ \thechapter}{12pt}{}
+\titlespacing*{\chapter}{0pt}{0pt}{24pt}
+
+\titleformat{\section}
+  {\sffamily\Large\bfseries\color{BookBlue}}
+  {\thesection}{1em}{}
+\titlespacing*{\section}{0pt}{18pt}{6pt}
+
+\titleformat{\subsection}
+  {\sffamily\large\bfseries\color{BookDark}}
+  {\thesubsection}{1em}{}
+\titlespacing*{\subsection}{0pt}{14pt}{4pt}
+
+\titleformat{\subsubsection}
+  {\sffamily\normalsize\bfseries\color{BookDark}}
+  {\thesubsubsection}{1em}{}
+\titlespacing*{\subsubsection}{0pt}{10pt}{2pt}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE]{\small\sffamily\color{BookMid}\leftmark}
+\fancyhead[RO]{\small\sffamily\color{BookMid}\rightmark}
+\fancyfoot[LE,RO]{\small\sffamily\color{BookMid}\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[LE,RO]{\small\sffamily\color{BookMid}\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
+
+\makeatletter
+\renewcommand{\cleardoublepage}{%
+  \clearpage
+  \if@twoside
+    \ifodd\c@page
+    \else
+      \thispagestyle{empty}%
+      \hbox{}%
+      \newpage
+      \if@twocolumn\hbox{}\newpage\fi
+    \fi
+  \fi
+}
+\makeatother
+
+\usepackage{rotating}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{longtable}
+\renewcommand{\arraystretch}{1.35}
+
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\captionsetup{
+  font      = {small,sf},
+  labelfont = {bf,color=BookBlue},
+  skip      = 6pt
+}
+
+\usepackage{listings}
+
+\lstset{
+  backgroundcolor   = \color{CodeBg},
+  basicstyle        = \ttfamily\fontsize{9.5}{11}\selectfont,
+  keywordstyle      = \color{CodeKeyword}\bfseries,
+  stringstyle       = \color{CodeString}\itshape,
+  commentstyle      = \color{CodeComment}\itshape,
+  numbers           = left,
+  numberstyle       = \tiny\color{BookMid},
+  numbersep         = 6pt,
+  breaklines        = true,
+  frame             = single,
+  framerule         = 0.4pt,
+  rulecolor         = \color{NoteBorder},
+  showstringspaces  = false,
+  tabsize           = 2,
+  captionpos        = b,
+  breakatwhitespace = false,
+  columns           = fullflexible,
+  linewidth         = \linewidth,
+  postbreak         = {},
+  xleftmargin       = 1.5em,
+  framexleftmargin  = 1.5em,
+  aboveskip         = 6pt,
+  belowskip         = 4pt,
+}
+
+\lstdefinelanguage{rego}{
+  keywords={package, import, default, allow, deny, not, as, if, else, some, every, in, contains},
+  keywords=[2]{true, false, null},
+  keywordstyle=[2]\color{gray}\bfseries,
+  sensitive=true,
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{orange},
+  alsoletter={-},
+  literate={:=}{{$\gets$}}1 {<-}{{$\leftarrow$}}1
+}
+
+\lstdefinelanguage{json}{
+  morestring=[b]",
+  morestring=[b]',
+  morecomment=[l]//,
+  morecomment=[s]{/*}{*/},
+  literate=
+    *{0}{{\color{CodeString}0}}{1}
+     {1}{{\color{CodeString}1}}{1}
+     {2}{{\color{CodeString}2}}{1}
+     {3}{{\color{CodeString}3}}{1}
+     {4}{{\color{CodeString}4}}{1}
+     {5}{{\color{CodeString}5}}{1}
+     {6}{{\color{CodeString}6}}{1}
+     {7}{{\color{CodeString}7}}{1}
+     {8}{{\color{CodeString}8}}{1}
+     {9}{{\color{CodeString}9}}{1}
+     {:}{{\color{CodeKeyword}{:}}}{1}
+     {,}{{\color{CodeKeyword}{,}}}{1}
+     {\{}{{\color{CodeKeyword}{\{}}} {1}
+     {\}}{{\color{CodeKeyword}{\}}}} {1}
+     {[}{{\color{CodeKeyword}{[}}}{1}
+     {]}{{\color{CodeKeyword}{]}}}{1},
+  sensitive=true,
+  alsoletter={:,-},
+  morekeywords={true,false,null},
+  keywordstyle=\color{CodeKeyword}\bfseries,
+  stringstyle=\color{CodeString},
+  commentstyle=\color{CodeComment}\itshape,
+}
+
+\lstdefinelanguage{TypeScript}{
+  morekeywords={abstract,any,as,asserts,async,await,bigint,boolean,
+    break,case,catch,class,const,continue,declare,default,delete,do,
+    else,enum,export,extends,false,finally,for,from,function,get,
+    global,if,implements,import,in,infer,instanceof,interface,is,
+    keyof,let,module,namespace,new,null,number,object,of,package,
+    private,protected,public,readonly,require,return,satisfies,set,
+    static,string,super,switch,symbol,throw,true,try,type,typeof,
+    undefined,unique,unknown,using,var,void,while,with,yield,
+    override,accessor,out},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]',
+  sensitive=true,
+  alsoletter={.},
+  keywordstyle=\color{CodeKeyword}\bfseries,
+  stringstyle=\color{CodeString},
+  commentstyle=\color{CodeComment}\itshape,
+  breaklines=true,
+  showstringspaces=false,
+}
+
+\lstdefinelanguage{CSharp}{
+  morekeywords={abstract,async,await,base,bool,break,byte,case,catch,
+    char,checked,class,const,continue,decimal,default,delegate,do,
+    double,else,enum,event,explicit,extern,false,finally,fixed,float,
+    for,foreach,goto,if,implicit,in,int,interface,internal,is,lock,
+    long,namespace,new,null,object,operator,out,override,params,
+    private,protected,public,readonly,ref,return,sbyte,sealed,short,
+    sizeof,stackalloc,static,string,struct,switch,this,throw,true,
+    try,typeof,uint,ulong,unchecked,unsafe,ushort,using,virtual,void,
+    volatile,while,add,alias,ascending,descending,dynamic,from,get,
+    global,group,into,join,let,orderby,partial,remove,select,set,
+    value,var,where,yield},
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]',
+  sensitive=true,
+  alsoletter={.},
+  keywordstyle=\color{CodeKeyword}\bfseries,
+  stringstyle=\color{CodeString},
+  commentstyle=\color{CodeComment}\itshape,
+  breaklines=true,
+  breakatwhitespace=false,
+  breakindent=0pt,
+  columns=fullflexible,
+  keepspaces=true,
+  postbreak=\mbox{\textcolor{gray}{$\hookrightarrow$}\space},
+  showstringspaces=false,
+}
+
+\lstdefinelanguage{Java}{
+  morekeywords={
+    abstract,assert,boolean,break,byte,case,catch,char,class,const,continue,
+    default,do,double,else,enum,extends,final,finally,float,for,goto,if,
+    implements,import,instanceof,int,interface,long,native,new,package,
+    private,protected,public,return,short,static,strictfp,super,switch,
+    synchronized,this,throw,throws,transient,try,void,volatile,while,
+    module,requires,exports,opens,uses,provides,to,with,transitive,
+    var,
+    record,sealed,permits,non-sealed,yield
+  },
+  morekeywords=[2]{true,false,null},
+  morekeywords=[3]{@interface},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]',
+  alsoletter={.},
+  keywordstyle=\color{CodeKeyword}\bfseries,
+  keywordstyle=[2]\color{CodeConstant},
+  keywordstyle=[3]\color{CodeAnnotation},
+  stringstyle=\color{CodeString},
+  commentstyle=\color{CodeComment}\itshape,
+  breaklines=true,
+  breakatwhitespace=false,
+  breakindent=0pt,
+  columns=fullflexible,
+  keepspaces=true,
+  postbreak=\mbox{\textcolor{gray}{$\hookrightarrow$}\space},
+  showstringspaces=false,
+}
+
+\lstdefinelanguage{dockerfile}{
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+  morekeywords={FROM,MAINTAINER,RUN,CMD,LABEL,EXPOSE,ENV,ADD,COPY,
+    ENTRYPOINT,VOLUME,USER,WORKDIR,ARG,ONBUILD,STOPSIGNAL,HEALTHCHECK,
+    SHELL},
+  sensitive=true,
+  keywordstyle=\color{CodeKeyword}\bfseries,
+  commentstyle=\color{CodeComment}\itshape,
+  stringstyle=\color{CodeString},
+  breaklines=true,
+  showstringspaces=false,
+}
+
+\usepackage{amsmath}
+\lstdefinelanguage{yaml}{
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+  moredelim=[l][{\color{CodeKeyword}\bfseries}]{:},
+  moredelim=*[l][{\color{CodeString}}]{- },
+  moredelim=[s][{\color{CodeKeyword}\bfseries}]{\{}{\}},
+  moredelim=[s][{\color{CodeKeyword}\bfseries}]{[}{]},
+  literate=
+    *{true}{{{\color{CodeKeyword}true}}}{4}
+    {false}{{{\color{CodeKeyword}false}}}{5}
+    {null}{{{\color{CodeKeyword}null}}}{4},
+  sensitive=true,
+  keywordstyle=\color{CodeKeyword}\bfseries,
+  stringstyle=\color{CodeString},
+  commentstyle=\color{CodeComment}\itshape,
+  breaklines=true,
+  breakatwhitespace=true,
+  columns=fullflexible,
+  showstringspaces=false
+}
+
+\DeclareRobustCommand{\code}[1]{\texttt{#1}}
+\providecommand{\term}[1]{\textit{#1}}
+\providecommand{\chapterquote}[2]{%
+  \vspace{1em}
+  \begin{quote}\itshape#1\end{quote}
+  \begin{flushright}--- #2\end{flushright}
+  \vspace{1em}
+}
+
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+
+\newtcolorbox{learningbox}{
+  colback=LearnBg, colframe=LearnBorder,
+  before skip = 12pt, fonttitle=\sffamily\bfseries\small, title={Learning Objective},
+  breakable, lines before break=3,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  boxrule=0.6pt, width=\linewidth
+}
+\newtcolorbox{tipbox}{
+  colback=TipBg, colframe=TipBorder,
+  before skip = 12pt, fonttitle=\sffamily\bfseries\small, title={Tip},
+  breakable, lines before break=3,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  boxrule=0.6pt, width=\linewidth
+}
+\newtcolorbox{warningbox}{
+  colback=WarningBg, colframe=WarningBorder,
+  before skip = 12pt, fonttitle=\sffamily\bfseries\small, title={Warning},
+  breakable, lines before break=3,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  boxrule=0.6pt, width=\linewidth
+}
+\newtcolorbox{notebox}{
+  colback=NoteBg, colframe=NoteBorder,
+  before skip = 12pt, fonttitle=\sffamily\bfseries\small, title={Note},
+  breakable, lines before break=3,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  boxrule=0.6pt, width=\linewidth
+}
+\newtcolorbox{takeawaybox}{
+  colback=TakeawayBg, colframe=TakeawayBorder,
+  before skip = 12pt, fonttitle=\sffamily\bfseries\small, title={Key Takeaway},
+  breakable, lines before break=3,
+  left=8pt, right=8pt, top=6pt, bottom=6pt,
+  boxrule=0.6pt, width=\linewidth
+}
+
+\usepackage{amssymb}
+
+\PassOptionsToPackage{hyphens}{url}
+\usepackage{hyperref}
+\usepackage{imakeidx}
+\makeindex[columns=2, title=Index, intoc=true]
+\urlstyle{tt}
+\makeatletter
+\g@addto@macro\UrlBreaks{\do\.\do\_\do\-}
+\makeatother
+\DeclareUrlCommand{\code}{\urlstyle{tt}}
+
+\hypersetup{
+  colorlinks  = true,
+  linkcolor   = BookBlue,
+  urlcolor    = BookBlue,
+  citecolor   = BookBlue,
+  pdftitle    = {Engineering AI Agents for Production},
+  pdfauthor   = {Haythem Aber},
+  pdfsubject  = {Engineering AI Agents for Production - From LLMs to Agent Ecosystems, Volume~2},
+  pdfkeywords = {AI agents production, Java agent framework, Kubernetes agents, observability evaluation, LLM security governance, production case studies}
+}
+
+\gdef\theBookTitle{Engineering AI Agents for Production}
+\gdef\theBookSubtitle{Infrastructure, Observability, Security,
+and Production Case Studies}
+\gdef\theBookAuthor{Haythem Aber}
+\gdef\theBookYear{2026}
+\gdef\theBookDate{April 2026}
+\gdef\theBookVolume{Volume 2}
+\gdef\theBookVolumeScope{From LLMs to Agent Ecosystems}
+
+\newcommand{\BookTitle}[1]{\gdef\theBookTitle{#1}}
+\newcommand{\BookSubtitle}[1]{\gdef\theBookSubtitle{#1}}
+\newcommand{\BookAuthor}[1]{\gdef\theBookAuthor{#1}}
+\newcommand{\BookYear}[1]{\gdef\theBookYear{#1}}
+\newcommand{\BookDate}[1]{\gdef\theBookDate{#1}}
+\newcommand{\BookVolume}[1]{\gdef\theBookVolume{#1}}
+\newcommand{\BookVolumeScope}[1]{\gdef\theBookVolumeScope{#1}}
+
+\newcommand{\makecover}{%
+  \begin{titlepage}%
+    \thispagestyle{empty}%
+    \vspace*{2cm}%
+    \begin{center}%
+      {\sffamily\large\scshape\theBookVolume\par}%
+      \vspace{0.3cm}%
+      {\sffamily\small\itshape\theBookVolumeScope\par}%
+      \vspace{1.2cm}%
+      \hrule height 0.5pt\par%
+      \vspace{1.2cm}%
+      {\sffamily\fontsize{38}{46}\bfseries\selectfont
+        \theBookTitle\par}%
+      \vspace{1.2cm}%
+      \hrule height 0.5pt\par%
+      \vspace{0.8cm}%
+      {\sffamily\fontsize{11}{14}\selectfont
+        \theBookSubtitle\par}%
+      \vspace{1.5cm}%
+      {\sffamily\Large\theBookAuthor\par}%
+      \vfill%
+      {\sffamily\normalsize\theBookDate\par}%
+      \vspace{0.5cm}%
+      {\sffamily\small\itshape
+        Volume~1: \textit{Architecting AI Agent Systems}
+        --- Available Now\par}%
+      \vspace{0.8cm}%
+    \end{center}%
+  \end{titlepage}%
+  \nopagecolor%
+}
+
+\newcommand{\partclose}[1]{%
+  \cleardoublepage
+  \vspace*{\fill}
+  \begin{center}
+    \sffamily\Large\color{BookBlue}#1
+  \end{center}
+  \vspace*{\fill}
+  \cleardoublepage
+}
+
+\newcommand{\makecopyright}{%
+  \thispagestyle{empty}%
+  \vspace*{\fill}%
+  \begin{small}%
+    \noindent\textit{\theBookTitle}\\%
+    \textit{\theBookSubtitle}\\%
+    \textit{\theBookVolume: \theBookVolumeScope}\\[12pt]%
+    \noindent Copyright \textcopyright{} \theBookYear\
+    \theBookAuthor. All rights reserved.\\[8pt]%
+    \noindent No part of this publication may be reproduced,
+    distributed, or transmitted in any form or by any means
+    without prior written permission of the author.\\[8pt]%
+    \noindent\textbf{Permissions:} For rights and licensing
+    enquiries, contact the author directly.\\[8pt]%
+    \noindent First edition. \theBookDate.%
+  \end{small}%
+  \vspace*{\fill}%
+  \clearpage%
+}
+
+\newcommand{\makededication}[1]{%
+  \cleardoublepage%
+  \thispagestyle{empty}%
+  \vspace*{\fill}%
+  \begin{center}\itshape #1\end{center}%
+  \vspace*{\fill}%
+  \clearpage%
+}
+
+\newcommand{\makehalftitle}{%
+  \cleardoublepage%
+  \thispagestyle{empty}%
+  \vspace*{\fill}%
+  \begin{center}%
+    {\sffamily\LARGE\bfseries\color{BookBlue}\theBookTitle}%
+  \end{center}%
+  \vspace*{\fill}%
+  \clearpage%
+}
+
+\newenvironment{preface}{%
+  \cleardoublepage%
+  \chapter*{Preface to Volume~2}%
+  \addcontentsline{toc}{chapter}{Preface to Volume~2}%
+  \markboth{Preface to Volume~2}{Preface to Volume~2}%
+}{\clearpage}
+
+\pretocmd{\tableofcontents}{\cleardoublepage}{}{}
+\setcounter{tocdepth}{1}
+
+% ============================================================
+%%% === MACROS ===
+% ============================================================
+
+\newcommand{\component}[1]{\textsf{\textbf{#1}}}
+\newcommand{\seechapter}[1]{\textit{(See Chapter~\ref{#1})}}
+\newcommand{\seepart}[1]{\textit{(See Part~\ref{#1})}}
+
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+
+\usepackage{pdflscape}
+\usepackage{ragged2e}
+
+% ============================================================
+\begin{document}
+% ============================================================
+
+\BookTitle{Engineering AI Agents for Production}
+\BookSubtitle{Infrastructure, Observability, Security,
+and Production Case Studies}
+\BookVolume{Volume 2}
+\BookVolumeScope{From LLMs to Agent Ecosystems}
+\BookAuthor{Haythem Aber}
+\BookYear{2026}
+\BookDate{April 2026}
+
+% ============================================================
+\frontmatter
+% ============================================================
+
+\makehalftitle
+\makecover
+\makecopyright
+\makededication{%
+  Architecture is the set of decisions\\
+  that are hard to reverse.\\
+  Make them deliberately.%
+}
+
+\begin{preface}
+% TODO: preface text (preserved from original)
+\end{preface}
+
+\tableofcontents
+
+% ============================================================
+\mainmatter
+% ============================================================
+
+% ============================================================
+% PART 1 — Building an Agent Framework from Scratch
+% (~130 pages, Chapters 1–4)
+% ============================================================
+\part{Building an Agent Framework from Scratch}
+\label{part:framework}
+
+% ----------------------------------------------------------
+\chapter{Design Principles Before Writing Code}
+\label{ch:design-principles-before-writing-code}
+% TODO: Rewrite per edit plan Section 4, Chapter 1.
+% Keep: 6-principles table, runtime requirements list, concurrency section, §4.9, §4.10.
+% Delete: §4.1–§4.8 interface subsections (presented without motivation).
+% Replace: interface subsections → "Interface Catalogue as an Architecture Decision" + Fig 1.1 + Fig 1.2.
+% Add: "Before you build: the failure modes" narrative opening (2 pages).
+
+% ----------------------------------------------------------
+\chapter{Architecting the Core Runtime}
+\label{ch:core-runtime}
+% TODO: Rewrite per edit plan Section 4, Chapter 2.
+% Keep: state transition table (Table 2.1), StepExecutionException design, interrupt narrative, two-phase model.
+% Delete: ~480 lines of complete class listings (Run, DefaultRunScheduler, RunHandleImpl, InMemoryRepository, OpenAiModelClient, AgentBuilder).
+% Replace: each listing → focused excerpt ≤40 lines (transition(), checkpoint(), LEGAL_TRANSITIONS; switch dispatch only).
+% Add: "What the Loop Does Not Do" sidebar + Fig 2.1 (sequence) + Fig 2.2 (interrupt state diagram).
+
+% ----------------------------------------------------------
+\chapter{Implementing Memory, Tools, and Orchestration}
+\label{ch:memory-tools-orchestration}
+% TODO: Rewrite per edit plan Section 4, Chapter 3.
+% Keep: MemoryRecord contract (~12l), TokenWindowMemoryPolicy explanation, structured-concurrency paragraph,
+%        ReactOutputParser.parse() (~25l), McpToolAdapter concept.
+% Delete: ~620 lines (3 backend classes, DefaultToolRegistry, ToolExecutionExecutor, McpClient, ReActOrchestrator, AgentBuilder).
+% Replace: backends → comparison table; registry → 20-line register()+execute() excerpt; ReAct → 30-line dispatch.
+% Add: "Memory Tiers: What the Run Sees vs. What Persists" subsection + Fig 3.1 + Fig 3.2 + Fig 3.3.
+% Apply: H3 fix (TaintActionValidator BLOCK behaviour); A1 fix (memory injection pipeline in §9.5).
+
+% ----------------------------------------------------------
+\chapter{Implementing the Protocol Stack}
+\label{ch:protocol-stack}
+% TODO: Rewrite per edit plan Section 4, Chapter 4.
+% Keep: TenantPolicyEngine.evaluate() 30-line excerpt, StructuredEventExporter route method 25l, integration tests (expanded).
+% Delete: ~580 lines (HttpAgentAdapter 120l, McpServerAdapter 200l, A2AServerAdapter 180l, A2AClient 80l).
+% Replace: each adapter → 15-line excerpt showing only the AgentRuntime.run() bridge.
+% Add: "Why Protocol Separation Matters" opening + Fig 4.1 (protocol adapter pattern).
+
+\partclose{End of Part~1 --- The framework is built.
+Parts~2 through~4 make it production-ready.}
+
+% ============================================================
+% PART 2 — Infrastructure for Distributed Agent Systems
+% (~140 pages, Chapters 5–11)
+% ============================================================
+\part{Infrastructure for Distributed Agent Systems}
+\label{part:infrastructure}
+
+% ----------------------------------------------------------
+\chapter{The Agent Control Plane}
+\label{ch:control-plane}
+% TODO: Rewrite per edit plan Section 5, Chapter 5.
+% Keep: desired-state/observed-state explanation, 3 mandatory health dimensions, 4 workflow patterns taxonomy.
+% Delete: Java impl subsections (~60 lines) → replace with config YAML.
+% Add: "What the Part 1 Framework Cannot Do Alone" opening + Fig 5.1 (control plane object model).
+
+% ----------------------------------------------------------
+\chapter{Sandboxing and Isolation}
+\label{ch:sandboxing}
+% TODO: Rewrite per edit plan Section 5 standard rule.
+% Delete: all listings >30 lines.
+% Keep: comparison tables, decision frameworks, architectural diagrams.
+% Replace: listings → config/YAML excerpts.
+% Add: "What the Part 1 Framework Cannot Do Alone" opening + one architectural diagram.
+
+% ----------------------------------------------------------
+\chapter{Messaging and Event-Driven Coordination}
+\label{ch:messaging}
+% TODO: Rewrite per edit plan Section 5 standard rule.
+% Delete: all listings >30 lines.
+% Keep: comparison tables, decision frameworks, architectural diagrams.
+% Replace: listings → Kafka topic configs, Temporal workflow definitions.
+% Add: "What the Part 1 Framework Cannot Do Alone" opening + Fig 8.1 (event-driven workflow patterns).
+
+% ----------------------------------------------------------
+\chapter{Event Sourcing for Agent State}
+\label{ch:event-sourcing}
+% TODO: Rewrite per edit plan Section 5 standard rule.
+% Delete: all listings >30 lines.
+% Keep: comparison tables, decision frameworks.
+% Replace: listings → config excerpts.
+% Add: "What the Part 1 Framework Cannot Do Alone" opening + Fig 9.1 (event sourcing sequence diagram).
+
+% ----------------------------------------------------------
+\chapter{Deploying Agents on Kubernetes}
+\label{ch:kubernetes}
+% TODO: Rewrite per edit plan Section 5 standard rule.
+% Delete: all listings >30 lines.
+% Keep: comparison tables, decision frameworks, architectural diagrams.
+% Replace: listings → Kubernetes YAML manifests.
+% Add: "What the Part 1 Framework Cannot Do Alone" opening + one architectural diagram.
+
+% ----------------------------------------------------------
+\chapter{Multi-Cloud and Hybrid Deployments}
+\label{ch:multi-cloud}
+% TODO: Rewrite per edit plan Section 5 standard rule.
+% Delete: all listings >30 lines.
+% Keep: comparison tables, decision frameworks, architectural diagrams.
+% Replace: listings → config excerpts.
+% Add: "What the Part 1 Framework Cannot Do Alone" opening + one architectural diagram.
+
+% ----------------------------------------------------------
+\chapter{Sustainability and Cost Efficiency}
+\label{ch:sustainability}
+% TODO: Rewrite per edit plan Section 5 standard rule.
+% Delete: all listings >30 lines.
+% Keep: comparison tables, decision frameworks.
+% Replace: listings → config excerpts.
+% Add: "What the Part 1 Framework Cannot Do Alone" opening + one architectural diagram.
+
+\partclose{End of Part~2 --- The framework scales.
+Part~3 makes it observable, measurable, and testable.}
+
+% ============================================================
+% PART 3 — Observability, Evaluation, and Testing
+% (~110 pages, Chapters 12–17)
+% ============================================================
+\part{Observability, Evaluation, and Testing}
+\label{part:observability}
+
+% ----------------------------------------------------------
+\chapter{Observability: Tracing, Logging, and Metrics}
+\label{ch:observability}
+% TODO: Rewrite per edit plan Section 6, Chapter 12.
+% Keep: 3-level observability hierarchy explanation, metric naming conventions table.
+% Delete: duplicate StructuredEventExporter listing (already in Ch 4).
+% Add: "Diagnosing a Silent Loop" walkthrough + Fig 12.1 (observability signal hierarchy).
+
+% ----------------------------------------------------------
+\chapter{Evaluation Frameworks and Quality Gates}
+\label{ch:evaluation}
+% TODO: Rewrite per edit plan Section 6 standard rule (Ch 13).
+% Delete: listings. Keep: tables, decision frameworks. Add: one diagram.
+
+% ----------------------------------------------------------
+\chapter{Explainability and Trajectory Reconstruction}
+\label{ch:explainability}
+% TODO: Rewrite per edit plan Section 6, Chapter 14 — EXPANDED treatment.
+% Show CycleRecord + AgentEvent streams → ExplainabilityFormatter → human-readable trajectory.
+% Add: Fig 14.1 (reasoning chain reconstruction flowchart).
+
+% ----------------------------------------------------------
+\chapter{Simulation and Synthetic Testing}
+\label{ch:simulation}
+% TODO: Rewrite per edit plan Section 6 standard rule (Ch 15).
+% Delete: listings. Keep: tables, decision frameworks. Add: one diagram.
+
+% ----------------------------------------------------------
+\chapter{Replay and Deterministic Debugging}
+\label{ch:replay}
+% TODO: Rewrite per edit plan Section 6 standard rule (Ch 16).
+% Delete: listings. Keep: tables, decision frameworks. Add: one diagram.
+
+% ----------------------------------------------------------
+\chapter{Cost Modelling and Budget Control}
+\label{ch:cost-modelling}
+% TODO: Rewrite per edit plan Section 6 standard rule (Ch 17).
+% Delete: listings. Keep: tables, decision frameworks. Add: one diagram.
+
+\partclose{End of Part~3 --- The framework is observable and testable.
+Part~4 secures it.}
+
+% ============================================================
+% PART 4 — Security and Governance
+% (~80 pages, Chapters 18–21)
+% ============================================================
+\part{Security and Governance}
+\label{part:security}
+
+% ----------------------------------------------------------
+\chapter{The Agent Threat Landscape}
+\label{ch:threat-landscape}
+% TODO: Rewrite per edit plan Section 7, Chapter 18.
+% Essay-style, no listings.
+% Delete: any code fragments that belong in later chapters.
+% Add: threat taxonomy table (threat → framework component) + Fig 18.1 (threat-defence mapping Mermaid).
+
+% ----------------------------------------------------------
+\chapter{Secure by Design}
+\label{ch:secure-by-design}
+% TODO: Rewrite per edit plan Section 7, Chapter 19.
+% Primary action: listing removals (standard rule).
+% Keep: architectural defence patterns.
+
+% ----------------------------------------------------------
+\chapter{Enterprise Governance}
+\label{ch:enterprise-governance}
+% TODO: Rewrite per edit plan Section 7, Chapter 20.
+% Primary action: listing removals.
+% Add: GDPR right-to-erasure walkthrough using InMemoryAuditLog.allRecordsForUser() and contentHash field.
+
+% ----------------------------------------------------------
+\chapter{Runtime Security Monitoring}
+\label{ch:runtime-security}
+% TODO: Rewrite per edit plan Section 7, Chapter 21.
+% Primary action: listing removals.
+% Keep: architectural defence patterns.
+
+\partclose{End of Part~4 --- The framework is secure.
+Part~5 puts it to work.}
+
+% ============================================================
+% PART 5 — Production Agent Architectures
+% (~80 pages, Chapters 22–28)
+% ============================================================
+\part{Production Agent Architectures}
+\label{part:production-architectures}
+
+% Each chapter follows the 4-section case study template:
+%   §1 Problem and unique constraints
+%   §2 Architectural decisions (component diagram)
+%   §3 Key implementation points (2–3 excerpts, 15–20 lines each)
+%   §4 What to monitor and what to test
+
+% ----------------------------------------------------------
+\chapter{The Enterprise Copilot}
+\label{ch:enterprise-copilot}
+% TODO: Rewrite per edit plan Section 8.
+% Add: Fig 22.1 (component composition diagram — AgentRuntime + CoT + TieredMemory + MCP tools + SecurityEnforcer + HITL + OTel).
+
+% ----------------------------------------------------------
+\chapter{The Autonomous Research Agent}
+\label{ch:research-agent}
+% TODO: Rewrite per edit plan Section 8.
+% Add: component composition diagram.
+
+% ----------------------------------------------------------
+\chapter{The Multi-Agent Pipeline}
+\label{ch:multi-agent-pipeline}
+% TODO: Rewrite per edit plan Section 8.
+% Add: component composition diagram.
+
+% ----------------------------------------------------------
+\chapter{The HITL Approval Workflow Agent}
+\label{ch:hitl-workflow}
+% TODO: Rewrite per edit plan Section 8.
+% Add: component composition diagram.
+
+% ----------------------------------------------------------
+\chapter{The RAG-Augmented Knowledge Agent}
+\label{ch:rag-knowledge-agent}
+% TODO: Rewrite per edit plan Section 8.
+% Add: component composition diagram.
+
+% ----------------------------------------------------------
+\chapter{The Code Generation Agent}
+\label{ch:code-generation-agent}
+% TODO: Rewrite per edit plan Section 8.
+% Add: component composition diagram.
+
+% ----------------------------------------------------------
+\chapter{The Autonomous Operations Agent}
+\label{ch:operations-agent}
+% TODO: Rewrite per edit plan Section 8.
+% Add: component composition diagram.
+
+\partclose{End of Part~5 --- Architecture applied.
+Part~6 looks ahead.}
+
+% ============================================================
+% PART 6 — The Future of Agentic AI
+% (~15 pages, Chapters 29–37 — essay style, no code)
+% ============================================================
+\part{The Future of Agentic AI}
+\label{part:future}
+
+% ----------------------------------------------------------
+\chapter{Emerging Architectures}
+\label{ch:emerging-architectures}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{The Agent Ecosystem}
+\label{ch:agent-ecosystem}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{Open Problems and Research Directions}
+\label{ch:open-problems}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{Towards Trustworthy Agents}
+\label{ch:trustworthy-agents}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{Agent–Human Collaboration}
+\label{ch:agent-human-collaboration}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{Regulation and Compliance Horizons}
+\label{ch:regulation-compliance}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{The Economics of Agentic Systems}
+\label{ch:economics}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{Closing Perspectives}
+\label{ch:closing-perspectives}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ----------------------------------------------------------
+\chapter{What Comes Next}
+\label{ch:what-comes-next}
+% TODO: Light edit only. Essay-style. No code changes.
+
+% ============================================================
+\backmatter
+% ============================================================
+
+\printindex
+
+\end{document}

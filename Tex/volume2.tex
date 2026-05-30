@@ -3,7 +3,6 @@
 
 
 
-
 \documentclass[
   11pt,
   twoside,
@@ -218,8 +217,8 @@
      {9}{{\color{CodeString}9}}{1}
      {:}{{\color{CodeKeyword}{:}}}{1}
      {,}{{\color{CodeKeyword}{,}}}{1}
-     {\{}{{\color{CodeKeyword}{\{}}} {1}
-     {\}}{{\color{CodeKeyword}{\}}}} {1}
+     {\{}}{{\color{CodeKeyword}{\{}}} {1}
+     {\}}}{{\color{CodeKeyword}{\}}}} {1}
      {[}{{\color{CodeKeyword}{[}}}{1}
      {]}{{\color{CodeKeyword}{]}}}{1},
   sensitive=true,
@@ -341,9 +340,9 @@
   moredelim=[s][{\color{CodeKeyword}\bfseries}]{\{}{\}},
   moredelim=[s][{\color{CodeKeyword}\bfseries}]{[}{]},
   literate=
-    *{true}{{{\color{CodeKeyword}true}}}{4}
-    {false}{{{\color{CodeKeyword}false}}}{5}
-    {null}{{{\color{CodeKeyword}null}}}{4},
+    *{true}{{\color{CodeKeyword}true}}{4}
+    {false}{{\color{CodeKeyword}false}}{5}
+    {null}{{\color{CodeKeyword}null}}{4},
   sensitive=true,
   keywordstyle=\color{CodeKeyword}\bfseries,
   stringstyle=\color{CodeString},
@@ -592,13 +591,8 @@ and Production Case Studies}
 \label{part:framework}
 
 % ----------------------------------------------------------
-\chapter{Design Principles Before Writing Code}
-\label{ch:design-principles-before-writing-code}
-% TODO: Rewrite per edit plan Section 4, Chapter 1.
-% Keep: 6-principles table, runtime requirements list, concurrency section, §4.9, §4.10.
-% Delete: §4.1–§4.8 interface subsections (presented without motivation).
-% Replace: interface subsections → "Interface Catalogue as an Architecture Decision" + Fig 1.1 + Fig 1.2.
-% Add: "Before you build: the failure modes" narrative opening (2 pages).
+% Chapter 1 — DONE: written, reviewed, all fixes applied.
+\input{Tex/chapter01}
 
 % ----------------------------------------------------------
 \chapter{Architecting the Core Runtime}
@@ -878,7 +872,7 @@ Part~6 looks ahead.}
 % TODO: Light edit only. Essay-style. No code changes.
 
 % ----------------------------------------------------------
-\chapter{Agent–Human Collaboration}
+\chapter{Agent--Human Collaboration}
 \label{ch:agent-human-collaboration}
 % TODO: Light edit only. Essay-style. No code changes.
 

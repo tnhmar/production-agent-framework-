@@ -7,7 +7,6 @@ import com.agentframework.security.TaintClassifier;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 /**
  * Drives the agent through its {@link RunState} machine.
@@ -38,6 +37,16 @@ import java.util.stream.Stream;
  * PLANNING step, before the {@code isLive()} guard that returns early on
  * terminal state.  Previously the record was skipped whenever {@link Review}
  * transitioned the context to a terminal state during the same cycle.
+ *
+ * <p><b>Streaming fix:</b> when a {@link StreamListener} is registered and
+ * the decided {@link Decision} is a {@link FinalAnswer}, the content that is
+ * already in {@code fa.content()} is streamed directly — character by
+ * character — to the listener.  The previous implementation made a second
+ * {@code LLMProvider.generate()} call via {@code LLMReasoning.streamFinalAnswer},
+ * which (a) burned the next script entry in {@link com.agentframework.reasoning.StubLLMProvider}
+ * corrupting every test's {@code callCount()}, (b) required a hard cast to
+ * {@code LLMReasoning} breaking the {@link Reasoning} abstraction, and
+ * (c) made an unnecessary network/model call in production.
  */
 class StateMachineRunner {
 
@@ -162,15 +171,15 @@ class StateMachineRunner {
                         if (!ctx.currentState().isTerminal())
                             ctx.transitionTo(RunState.VALIDATING);
 
-                        // If we reached a FinalAnswer decision and a
-                        // StreamListener is registered, emit a streaming pass
-                        // using a prose-only prompt. This is a second model
-                        // call by design.
+                        // Streaming fix: the FinalAnswer content is already
+                        // known — stream it directly without a second model
+                        // call. No cast to LLMReasoning, no script-pointer
+                        // side-effect on StubLLMProvider.
                         if (streamListener != null && decision instanceof FinalAnswer fa) {
                             try {
-                                Stream<String> tokens = ((com.agentframework.reasoning.LLMReasoning) agent.reasoning())
-                                        .streamFinalAnswer(ctx, obs);
-                                tokens.forEach(token -> streamListener.onToken(ctx.runId(), token));
+                                fa.content().chars()
+                                    .mapToObj(c -> String.valueOf((char) c))
+                                    .forEach(token -> streamListener.onToken(ctx.runId(), token));
                                 streamListener.onComplete(ctx.runId(), fa);
                             } catch (Throwable t) {
                                 streamListener.onError(ctx.runId(), t);

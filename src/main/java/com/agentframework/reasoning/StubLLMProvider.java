@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 /**
  * Deterministic, multi-turn LLM stub for testing.
@@ -37,6 +38,13 @@ import java.util.function.Predicate;
  * <p><b>Backward compatibility</b>: the three original static factories
  * ({@link #finalAnswer}, {@link #toolCall}, {@link #escalate}) are preserved
  * unchanged so existing single-step tests compile without modification.
+ *
+ * <p><b>{@code generateStream} contract</b>: overrides the default
+ * {@link LLMProvider#generateStream} so it peeks the next script entry
+ * <em>without</em> advancing {@code scriptPtr} or incrementing
+ * {@code totalCalls}.  This prevents any future streaming path from
+ * accidentally burning a script entry and corrupting test call-count
+ * assertions.
  *
  * <p><b>Thread safety</b>: not thread-safe — one instance per test.
  */
@@ -340,6 +348,25 @@ public final class StubLLMProvider implements LLMProvider {
         }
 
         return FALLBACK_JSON;
+    }
+
+    /**
+     * Streaming override — peeks the next script entry without advancing
+     * {@code scriptPtr} or incrementing {@code totalCalls}.
+     *
+     * <p>This prevents any streaming path (e.g. a future feature that calls
+     * {@link LLMProvider#generateStream} directly) from burning a script
+     * entry and corrupting {@link #callCount()} assertions in tests.
+     *
+     * <p>The returned stream splits the peeked response character-by-character,
+     * matching the default {@link LLMProvider#generateStream} contract.
+     */
+    @Override
+    public Stream<String> generateStream(Prompt prompt) {
+        String peeked = script.isEmpty()
+            ? FALLBACK_JSON
+            : script.get(Math.min(scriptPtr, script.size() - 1));
+        return peeked.chars().mapToObj(c -> String.valueOf((char) c));
     }
 
     @Override

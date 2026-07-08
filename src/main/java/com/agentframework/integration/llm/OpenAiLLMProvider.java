@@ -3,6 +3,7 @@ package com.agentframework.integration.llm;
 import com.agentframework.integration.http.*;
 import com.agentframework.reasoning.*;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -25,6 +26,8 @@ public final class OpenAiLLMProvider implements LLMProvider {
     private static final String FIELD_CONTENT  = "content";
     private static final String FIELD_CHOICES  = "choices";
     private static final String FIELD_MESSAGE  = "message";
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final LLMProviderConfig config;
     private final JsonHttpClient    http;
@@ -68,7 +71,7 @@ public final class OpenAiLLMProvider implements LLMProvider {
                 .takeWhile(json -> !"[DONE]".equals(json))
                 .map(json -> {
                     try {
-                        JsonNode node = http.newObject().mapper().readTree(json);
+                        JsonNode node = MAPPER.readTree(json);
                         JsonNode delta = node.path("choices").path(0).path("delta");
                         return delta.path("content").asText("");
                     } catch (Exception e) {

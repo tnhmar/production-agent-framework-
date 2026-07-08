@@ -7,6 +7,7 @@ import com.agentframework.security.TaintClassifier;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Drives the agent through its {@link RunState} machine.
@@ -45,6 +46,8 @@ class StateMachineRunner {
     private final LivenessDetector liveness;
     private final TaintClassifier  taintClassifier;
 
+    private StreamListener streamListener; // nullable — streaming is opt-in
+
     /** Default constructor: creates one TaintClassifier per runner instance. */
     StateMachineRunner(PlanValidator validator, EventSink events) {
         this(validator, events, new DefaultLivenessDetector(), new TaintClassifier());
@@ -56,6 +59,10 @@ class StateMachineRunner {
         this.events          = events;
         this.liveness        = liveness;
         this.taintClassifier = taintClassifier;
+    }
+
+    void setStreamListener(StreamListener listener) {
+        this.streamListener = listener;
     }
 
     void run(Agent agent, ExecutionContext ctx) {
@@ -154,6 +161,21 @@ class StateMachineRunner {
 
                         if (!ctx.currentState().isTerminal())
                             ctx.transitionTo(RunState.VALIDATING);
+
+                        // If we reached a final answer and a StreamListener is
+                        // registered, emit a streaming pass using a prose-only
+                        // prompt. This is a second model call by design.
+                        if (streamListener != null && result instanceof ActionResult.Final fr
+                                && fr.decision() instanceof FinalAnswer fa) {
+                            try {
+                                Stream<String> tokens = ((com.agentframework.reasoning.LLMReasoning) agent.reasoning())
+                                        .streamFinalAnswer(ctx, obs);
+                                tokens.forEach(token -> streamListener.onToken(ctx.runId(), token));
+                                streamListener.onComplete(ctx.runId(), fa);
+                            } catch (Throwable t) {
+                                streamListener.onError(ctx.runId(), t);
+                            }
+                        }
                     }
 
                     case ValidationResult.NeedsCorrection nc -> {

@@ -1,4 +1,3 @@
-// streaming import removed; no ActionResult.Final subtype exists
 package com.agentframework.core;
 
 import com.agentframework.foundation.*;
@@ -8,6 +7,7 @@ import com.agentframework.security.TaintClassifier;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Drives the agent through its {@link RunState} machine.

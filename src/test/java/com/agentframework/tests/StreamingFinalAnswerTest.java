@@ -53,7 +53,6 @@ public class StreamingFinalAnswerTest {
         InMemoryEventSink sink = new InMemoryEventSink();
         SimpleToolRegistry registry = new SimpleToolRegistry();
 
-        // Use StubLLMProvider with a single final answer
         StubLLMProvider llm = StubLLMProvider.finalAnswer("Hello streaming world");
         Agent agent = streamingAgent(llm, registry);
 
@@ -61,7 +60,7 @@ public class StreamingFinalAnswerTest {
                 .instruction("Explain streaming")
                 .maxCycles(5)
                 .maxTokens(2048)
-                .timeout(Duration.ofSeconds(30))
+                .maxWallClockTime(Duration.ofSeconds(30))
                 .build();
 
         List<String> tokens = new CopyOnWriteArrayList<>();

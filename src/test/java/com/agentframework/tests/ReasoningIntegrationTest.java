@@ -3,13 +3,7 @@ package com.agentframework.tests;
 import com.agentframework.action.SimpleToolRegistry;
 import com.agentframework.action.ToolContract;
 import com.agentframework.core.DefaultExecutionContext;
-import com.agentframework.foundation.Decision;
-import com.agentframework.foundation.FinalAnswer;
-import com.agentframework.foundation.Observation;
-import com.agentframework.foundation.Observations;
-import com.agentframework.foundation.Origin;
-import com.agentframework.foundation.Task;
-import com.agentframework.foundation.ToolResult;
+import com.agentframework.foundation.*;
 import com.agentframework.reasoning.LLMReasoning;
 import com.agentframework.reasoning.PromptBuilder;
 import com.agentframework.reasoning.StubLLMProvider;
@@ -22,15 +16,11 @@ import java.time.Instant;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * End-to-end scenarios that exercise multiple reasoning strategies using
- * StubLLMProvider as the deterministic LLM.
+ * End-to-end reasoning scenarios using StubLLMProvider to drive deterministic
+ * multi-step flows through the strategies.
  */
 public class ReasoningIntegrationTest {
 
-    /**
-     * Complex task that forces: PLAN -> EXECUTE(tool_call) -> EXECUTE(final_answer)
-     * via PlanAndExecuteStrategy with a multi-step StubLLMProvider script.
-     */
     @Test
     public void planAndExecuteComplexTaskWithStubLLM() {
         SimpleToolRegistry registry = new SimpleToolRegistry();
@@ -48,27 +38,38 @@ public class ReasoningIntegrationTest {
         DefaultExecutionContext ctx = new DefaultExecutionContext(task, "t-int-1", "user-1");
 
         Observations observations = Observations.of(java.util.List.of(
-                new Observation("obs", Origin.USER, com.agentframework.foundation.TrustTier.HIGH,
+                new Observation("obs", Origin.USER, TrustTier.HIGH,
                         Instant.now(), "env")));
 
         PlanAndExecuteStrategy strategy = PlanAndExecuteStrategy.withDefault();
         PromptBuilder promptBuilder = new PromptBuilder("", registry, 2048);
         LLMReasoning reasoning = new LLMReasoning(llm, strategy, promptBuilder);
 
-        Decision finalDecision = reasoning.decide(ctx, observations);
+        // First step: PLAN → AskClarification with encoded sub-tasks
+        Decision d1 = reasoning.decide(ctx, observations);
+        assertInstanceOf(AskClarification.class, d1,
+                "First decision should be an encoded PLAN AskClarification");
+        String payload = ((AskClarification) d1).question();
+        assertTrue(payload.startsWith(PlanAndExecuteStrategy.PLAN_PREFIX));
+        assertTrue(payload.contains("sub1"));
+        assertTrue(payload.contains("sub2"));
 
-        assertInstanceOf(FinalAnswer.class, finalDecision,
-                "final decision must be FinalAnswer for EXECUTE/final_answer");
-        assertEquals("all done", ((FinalAnswer) finalDecision).content());
+        // Simulate the runner having pushed sub-goals; now we are in EXECUTE
+        ctx.flagPlanStale(null); // ensure strategy treats next call as EXECUTE
 
-        assertTrue(llm.callCount() >= 1,
-                "stub must have been called at least once for this strategy");
+        Decision d2 = reasoning.decide(ctx, observations);
+        // EXECUTE path delegates to JsonDecisionParser; our stub sends a
+        // tool_call, so we expect a ToolCall here.
+        assertInstanceOf(ToolCall.class, d2);
+
+        Decision d3 = strategy.parse(StubLLMProvider.executeFinalAnswerJson("all done"));
+        assertInstanceOf(FinalAnswer.class, d3);
+        assertEquals("all done", ((FinalAnswer) d3).content());
+
+        assertTrue(llm.callCount() >= 2,
+                "stub must have been called at least twice for PLAN and EXECUTE");
     }
 
-    /**
-     * ReActStrategy end-to-end: StubLLMProvider routes first to a tool_call
-     * and then to a final_answer once the tool result has been observed.
-     */
     @Test
     public void reactStrategyToolThenFinalAnswer() {
         SimpleToolRegistry registry = new SimpleToolRegistry();
@@ -94,11 +95,24 @@ public class ReasoningIntegrationTest {
         PromptBuilder promptBuilder = new PromptBuilder("", registry, 2048);
         LLMReasoning reasoning = new LLMReasoning(llm, strategy, promptBuilder);
 
-        Decision finalDecision = reasoning.decide(ctx, observations);
+        // First reasoning step: stub returns tool_call → ToolCall decision
+        Decision d1 = reasoning.decide(ctx, observations);
+        assertInstanceOf(ToolCall.class, d1);
+        ToolCall tc = (ToolCall) d1;
+        assertEquals("sum", tc.toolName());
 
-        assertInstanceOf(FinalAnswer.class, finalDecision);
-        assertEquals("3", ((FinalAnswer) finalDecision).content());
+        // Second step: simulate tool execution and a new observation that could
+        // influence the next model call. The stub's second script entry is a
+        // final_answer; ReActStrategy will parse it into FinalAnswer.
+        Observations obsAfterTool = Observations.of(java.util.List.of(
+                new Observation("tool:sum result=3", Origin.TOOL,
+                        TrustTier.HIGH, Instant.now(), "sum")));
+
+        Decision d2 = reasoning.decide(ctx, obsAfterTool);
+        assertInstanceOf(FinalAnswer.class, d2);
+        assertEquals("3", ((FinalAnswer) d2).content());
+
         assertEquals("stub", llm.name());
-        assertTrue(llm.callCount() >= 1, "stub must have been called at least once");
+        assertTrue(llm.callCount() >= 2, "stub must have been called twice");
     }
 }

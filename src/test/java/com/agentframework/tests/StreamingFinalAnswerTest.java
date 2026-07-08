@@ -2,17 +2,13 @@ package com.agentframework.tests;
 
 import com.agentframework.action.DefaultAction;
 import com.agentframework.action.DefaultToolDispatcher;
-import com.agentframework.action.NoopAction;
 import com.agentframework.action.SimpleToolRegistry;
-import com.agentframework.action.ToolMiddleware;
+import com.agentframework.action.middleware.SafetyActionValidator;
 import com.agentframework.core.*;
 import com.agentframework.foundation.FinalAnswer;
-import com.agentframework.foundation.ToolResult;
 import com.agentframework.memory.impl.TieredMemory;
 import com.agentframework.observability.AgentEvent;
 import com.agentframework.observability.InMemoryEventSink;
-import com.agentframework.observability.NoopEventSink;
-import com.agentframework.perception.Perception;
 import com.agentframework.perception.SimplePerception;
 import com.agentframework.reasoning.LLMReasoning;
 import com.agentframework.reasoning.PromptBuilder;
@@ -39,7 +35,7 @@ public class StreamingFinalAnswerTest {
     private Agent streamingAgent(StubLLMProvider llm, SimpleToolRegistry reg) {
         DefaultToolDispatcher dispatcher = new DefaultToolDispatcher(reg);
         DefaultAction action = new DefaultAction(reg, List.of(new SafetyActionValidator()),
-                ToolMiddleware.identity(), dispatcher);
+                com.agentframework.action.middleware.ToolMiddleware.identity(), dispatcher);
         LLMReasoning reasoning = new LLMReasoning(llm, new ReActStrategy(),
                 new PromptBuilder("You are a helpful agent.", reg, 4096));
         return Agent.builder()
@@ -89,9 +85,8 @@ public class StreamingFinalAnswerTest {
         };
 
         AgentRuntime rt = runtime(sink);
-        rt.setStreamListener(listener);
-
-        ExecutionResult result = rt.execute(agent, task);
+        // Streaming API: execute and stream simultaneously
+        ExecutionResult result = rt.execute(agent, task, listener);
 
         assertTrue(result.succeeded(), "run should succeed");
         assertEquals("Hello streaming world", result.finalAnswer());

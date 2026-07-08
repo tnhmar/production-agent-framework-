@@ -1,3 +1,4 @@
+// streaming import removed; no ActionResult.Final subtype exists
 package com.agentframework.core;
 
 import com.agentframework.foundation.*;
@@ -7,7 +8,6 @@ import com.agentframework.security.TaintClassifier;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Stream;
 
 /**
  * Drives the agent through its {@link RunState} machine.
@@ -162,11 +162,11 @@ class StateMachineRunner {
                         if (!ctx.currentState().isTerminal())
                             ctx.transitionTo(RunState.VALIDATING);
 
-                        // If we reached a final answer and a StreamListener is
-                        // registered, emit a streaming pass using a prose-only
-                        // prompt. This is a second model call by design.
-                        if (streamListener != null && result instanceof ActionResult.Final fr
-                                && fr.decision() instanceof FinalAnswer fa) {
+                        // If we reached a FinalAnswer decision and a
+                        // StreamListener is registered, emit a streaming pass
+                        // using a prose-only prompt. This is a second model
+                        // call by design.
+                        if (streamListener != null && decision instanceof FinalAnswer fa) {
                             try {
                                 Stream<String> tokens = ((com.agentframework.reasoning.LLMReasoning) agent.reasoning())
                                         .streamFinalAnswer(ctx, obs);

@@ -1,13 +1,17 @@
 package com.agentframework.tests;
 
-import com.agentframework.reasoning.Decision;
-import com.agentframework.reasoning.FinalAnswer;
+import com.agentframework.foundation.Decision;
+import com.agentframework.foundation.FinalAnswer;
+import com.agentframework.foundation.ToolCall;
+import com.agentframework.reasoning.InferenceParameters;
+import com.agentframework.reasoning.Message;
 import com.agentframework.reasoning.Prompt;
 import com.agentframework.reasoning.StubLLMProvider;
-import com.agentframework.reasoning.ToolCall;
 import com.agentframework.reasoning.strategy.JsonDecisionParser;
 import com.agentframework.reasoning.strategy.ReActStrategy;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,9 +28,9 @@ public class StubLLMProviderTest {
                 .then(StubLLMProvider.finalAnswerJson("one"))
                 .then(StubLLMProvider.finalAnswerJson("two"));
 
-        Decision d1 = strategy.decide(llm, Prompt.user("u1"));
-        Decision d2 = strategy.decide(llm, Prompt.user("u2"));
-        Decision d3 = strategy.decide(llm, Prompt.user("u3"));
+        Decision d1 = strategy.decide(llm, userPrompt("u1"));
+        Decision d2 = strategy.decide(llm, userPrompt("u2"));
+        Decision d3 = strategy.decide(llm, userPrompt("u3"));
 
         assertInstanceOf(FinalAnswer.class, d1);
         assertInstanceOf(FinalAnswer.class, d2);
@@ -46,9 +50,9 @@ public class StubLLMProviderTest {
                 .then(StubLLMProvider.finalAnswerJson("base2"))
                 .onCall(1, StubLLMProvider.finalAnswerJson("override"));
 
-        Decision d0 = strategy.decide(llm, Prompt.user("step0"));
-        Decision d1 = strategy.decide(llm, Prompt.user("step1"));
-        Decision d2 = strategy.decide(llm, Prompt.user("step2"));
+        Decision d0 = strategy.decide(llm, userPrompt("step0"));
+        Decision d1 = strategy.decide(llm, userPrompt("step1"));
+        Decision d2 = strategy.decide(llm, userPrompt("step2"));
 
         assertEquals("base",     ((FinalAnswer) d0).content());
         assertEquals("override", ((FinalAnswer) d1).content(),
@@ -63,8 +67,8 @@ public class StubLLMProviderTest {
                 .then(StubLLMProvider.finalAnswerJson("default"))
                 .whenPromptContains("special", StubLLMProvider.finalAnswerJson("matched"));
 
-        Decision d1 = strategy.decide(llm, Prompt.user("no special word"));
-        Decision d2 = strategy.decide(llm, Prompt.user("this is special"));
+        Decision d1 = strategy.decide(llm, userPrompt("no special word"));
+        Decision d2 = strategy.decide(llm, userPrompt("this is special"));
 
         assertEquals("default", ((FinalAnswer) d1).content());
         assertEquals("matched", ((FinalAnswer) d2).content());
@@ -96,5 +100,11 @@ public class StubLLMProviderTest {
         Decision d2 = JsonDecisionParser.parse(ans);
         assertInstanceOf(FinalAnswer.class, d2);
         assertEquals("done", ((FinalAnswer) d2).content());
+    }
+
+    private static Prompt userPrompt(String content) {
+        return new Prompt(
+                List.of(new Message(Message.Role.USER, content)),
+                InferenceParameters.defaults());
     }
 }

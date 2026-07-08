@@ -1,11 +1,21 @@
 package com.agentframework.tests;
 
+import com.agentframework.action.DefaultAction;
+import com.agentframework.action.DefaultToolDispatcher;
+import com.agentframework.action.NoopAction;
+import com.agentframework.action.SimpleToolRegistry;
+import com.agentframework.action.ToolMiddleware;
 import com.agentframework.core.*;
-import com.agentframework.foundation.*;
-import com.agentframework.memory.WorkingMemory;
-import com.agentframework.observability.*;
+import com.agentframework.foundation.FinalAnswer;
+import com.agentframework.foundation.ToolResult;
+import com.agentframework.memory.impl.TieredMemory;
+import com.agentframework.observability.AgentEvent;
+import com.agentframework.observability.InMemoryEventSink;
+import com.agentframework.observability.NoopEventSink;
 import com.agentframework.perception.Perception;
+import com.agentframework.perception.SimplePerception;
 import com.agentframework.reasoning.LLMReasoning;
+import com.agentframework.reasoning.PromptBuilder;
 import com.agentframework.reasoning.StubLLMProvider;
 import com.agentframework.reasoning.strategy.ReActStrategy;
 import org.junit.jupiter.api.Test;
@@ -13,7 +23,6 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -23,33 +32,40 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class StreamingFinalAnswerTest {
 
+    private AgentRuntime runtime(InMemoryEventSink sink) {
+        return new AgentRuntime(new PassThroughPlanValidator(), sink);
+    }
+
+    private Agent streamingAgent(StubLLMProvider llm, SimpleToolRegistry reg) {
+        DefaultToolDispatcher dispatcher = new DefaultToolDispatcher(reg);
+        DefaultAction action = new DefaultAction(reg, List.of(new SafetyActionValidator()),
+                ToolMiddleware.identity(), dispatcher);
+        LLMReasoning reasoning = new LLMReasoning(llm, new ReActStrategy(),
+                new PromptBuilder("You are a helpful agent.", reg, 4096));
+        return Agent.builder()
+                .name("streaming-agent")
+                .perception(new SimplePerception())
+                .reasoning(reasoning)
+                .action(action)
+                .memory(TieredMemory.Builder.inMemory())
+                .build();
+    }
+
     @Test
     void fullRunStreamsFinalAnswerTokens() {
-        // Perception: no external observations
-        Perception perception = ctx -> Observations.empty();
+        InMemoryEventSink sink = new InMemoryEventSink();
+        SimpleToolRegistry registry = new SimpleToolRegistry();
 
-        // Use the shared StubLLMProvider with a simple script: one final answer
-        StubLLMProvider llm = new StubLLMProvider()
-                .then(StubLLMProvider.finalAnswerJson("Hello streaming world"));
+        // Use StubLLMProvider with a single final answer
+        StubLLMProvider llm = StubLLMProvider.finalAnswer("Hello streaming world");
+        Agent agent = streamingAgent(llm, registry);
 
-        ReActStrategy strategy = new ReActStrategy();
-
-        // LLMReasoning wired the same way as in ReasoningIntegrationTest, but
-        // we care about the streaming API rather than run()
-        LLMReasoning reasoning = new LLMReasoning(llm, strategy, com.agentframework.action.ToolRegistry.empty());
-
-        Agent agent = Agent.builder()
-                .name("streaming-agent")
-                .perception(perception)
-                .reasoning(reasoning)
-                .action(new com.agentframework.action.NoopAction())
-                .memory(WorkingMemory.create())
+        Task task = Task.builder()
+                .instruction("Explain streaming")
+                .maxCycles(5)
+                .maxTokens(2048)
+                .timeout(Duration.ofSeconds(30))
                 .build();
-
-        Task task = new Task(
-                "Explain streaming", 10, 2048,
-                Duration.ofMinutes(1), null, 3);
-        DefaultExecutionContext ctx = new DefaultExecutionContext(task, "tenant", "user");
 
         List<String> tokens = new CopyOnWriteArrayList<>();
         List<FinalAnswer> answers = new CopyOnWriteArrayList<>();
@@ -72,23 +88,22 @@ public class StreamingFinalAnswerTest {
             }
         };
 
-        PlanValidator validator = new PlanValidator() {
-            @Override
-            public ValidationResult validate(Decision decision, ExecutionContext ctx) {
-                return ValidationResult.passed();
-            }
-        };
-        EventSink events = new NoopEventSink();
-        StateMachineRunner runner = new StateMachineRunner(validator, events);
-        runner.setStreamListener(listener);
+        AgentRuntime rt = runtime(sink);
+        rt.setStreamListener(listener);
 
-        runner.run(agent, ctx);
+        ExecutionResult result = rt.execute(agent, task);
 
-        assertTrue(tokens.size() > 0, "Expected some streamed tokens");
+        assertTrue(result.succeeded(), "run should succeed");
+        assertEquals("Hello streaming world", result.finalAnswer());
+
+        assertFalse(tokens.isEmpty(), "Expected some streamed tokens");
         assertEquals(0, errors.size(), "No streaming errors expected");
         assertEquals(1, answers.size(), "Exactly one final answer expected");
+        assertEquals("Hello streaming world", answers.getFirst().content());
 
         String streamed = String.join("", tokens);
         assertEquals("Hello streaming world", streamed);
+        assertTrue(sink.count(AgentEvent.EventType.RUN_STARTED) >= 1);
+        assertTrue(sink.count(AgentEvent.EventType.RUN_COMPLETED) >= 1);
     }
 }

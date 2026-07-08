@@ -9,6 +9,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.stream.Stream;
 
 /**
  * Thin JSON-over-HTTP client used by all integration adapters.
@@ -21,7 +22,7 @@ import java.time.Duration;
  * deterministic errors — retrying cannot succeed without changing the request.
  * The fix introduces {@link NonRetryableHttpException} and a fast-fail check:
  * 4xx responses (except 429 Too Many Requests) throw immediately without
- * consuming any retry budget.
+ * consuming any retry budget.</p>
  *
  * <h3>Retry policy</h3>
  * <table>
@@ -211,6 +212,32 @@ public final class JsonHttpClient {
             throw re;
         } catch (Exception e) {
             throw new RuntimeException("PUT " + url + " failed", e);
+        }
+    }
+
+    /**
+     * Streaming helper: sends the given request and returns a lazily
+     * evaluated stream of response lines.
+     *
+     * <p>No retries are performed — streaming responses cannot be safely
+     * replayed mid-stream. Callers must handle errors on their own and
+     * decide whether to restart from scratch.
+     */
+    public Stream<String> sendLines(HttpRequest request) {
+        try {
+            HttpResponse<Stream<String>> resp =
+                    http.send(request, HttpResponse.BodyHandlers.ofLines());
+            if (resp.statusCode() < HTTP_OK_MIN || resp.statusCode() > HTTP_OK_MAX)
+                throw new RuntimeException(
+                        "HTTP " + resp.statusCode() + " from " + request.uri());
+            return resp.body();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted during streaming request", ie);
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception e) {
+            throw new RuntimeException("Streaming request failed for " + request.uri(), e);
         }
     }
 

@@ -2,10 +2,11 @@ package com.agentframework.tests;
 
 import com.agentframework.action.DefaultAction;
 import com.agentframework.action.DefaultToolDispatcher;
+import com.agentframework.action.SafetyActionValidator;
 import com.agentframework.action.SimpleToolRegistry;
-import com.agentframework.action.middleware.SafetyActionValidator;
+import com.agentframework.action.middleware.ToolMiddleware;
 import com.agentframework.core.*;
-import com.agentframework.foundation.FinalAnswer;
+import com.agentframework.foundation.*;
 import com.agentframework.memory.impl.TieredMemory;
 import com.agentframework.observability.AgentEvent;
 import com.agentframework.observability.InMemoryEventSink;
@@ -35,7 +36,7 @@ public class StreamingFinalAnswerTest {
     private Agent streamingAgent(StubLLMProvider llm, SimpleToolRegistry reg) {
         DefaultToolDispatcher dispatcher = new DefaultToolDispatcher(reg);
         DefaultAction action = new DefaultAction(reg, List.of(new SafetyActionValidator()),
-                com.agentframework.action.middleware.ToolMiddleware.identity(), dispatcher);
+                ToolMiddleware.identity(), dispatcher);
         LLMReasoning reasoning = new LLMReasoning(llm, new ReActStrategy(),
                 new PromptBuilder("You are a helpful agent.", reg, 4096));
         return Agent.builder()
@@ -85,7 +86,6 @@ public class StreamingFinalAnswerTest {
         };
 
         AgentRuntime rt = runtime(sink);
-        // Streaming API: execute and stream simultaneously
         ExecutionResult result = rt.execute(agent, task, listener);
 
         assertTrue(result.succeeded(), "run should succeed");

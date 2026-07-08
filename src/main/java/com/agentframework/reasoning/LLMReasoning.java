@@ -4,6 +4,8 @@ import com.agentframework.core.ExecutionContext;
 import com.agentframework.foundation.Decision;
 import com.agentframework.foundation.Observations;
 
+import java.util.stream.Stream;
+
 /**
  * {@link Reasoning} implementation that delegates to a {@link ReasoningStrategy}
  * via an injected {@link LLMProvider}.
@@ -45,5 +47,16 @@ public class LLMReasoning implements Reasoning {
     public Decision decide(ExecutionContext ctx, Observations obs) {
         Prompt p = promptBuilder.build(ctx, obs, strategy);
         return strategy.decide(llm, p);
+    }
+
+    /**
+     * Streaming variant used for final answers.
+     *
+     * <p>Builds a prose-only prompt via {@link PromptBuilder#buildProseOnly}
+     * and delegates to {@link ReasoningStrategy#streamFinalAnswer}.
+     */
+    public Stream<String> streamFinalAnswer(ExecutionContext ctx, Observations obs) {
+        Prompt p = promptBuilder.buildProseOnly(ctx, obs);
+        return strategy.streamFinalAnswer(llm, p);
     }
 }

@@ -2,6 +2,7 @@ package com.agentframework.integration.llm;
 
 import com.agentframework.integration.http.*;
 import com.agentframework.reasoning.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -74,8 +75,8 @@ public final class OpenAiLLMProvider implements LLMProvider {
                         JsonNode node = MAPPER.readTree(json);
                         JsonNode delta = node.path("choices").path(0).path("delta");
                         return delta.path("content").asText("");
-                    } catch (Exception e) {
-                        return ""; // swallow malformed frames; parse fallback handles errors
+                    } catch (JsonProcessingException e) {
+                        return ""; // malformed SSE frame — skip token
                     }
                 })
                 .filter(token -> !token.isEmpty());

@@ -37,6 +37,16 @@ import java.util.UUID;
  * PLANNING step, before the {@code isLive()} guard that returns early on
  * terminal state.  Previously the record was skipped whenever {@link Review}
  * transitioned the context to a terminal state during the same cycle.
+ *
+ * <p><b>Streaming fix:</b> when a {@link StreamListener} is registered and
+ * the decided {@link Decision} is a {@link FinalAnswer}, the content that is
+ * already in {@code fa.content()} is streamed directly — character by
+ * character — to the listener.  The previous implementation made a second
+ * {@code LLMProvider.generate()} call via {@code LLMReasoning.streamFinalAnswer},
+ * which (a) burned the next script entry in {@link com.agentframework.reasoning.StubLLMProvider}
+ * corrupting every test's {@code callCount()}, (b) required a hard cast to
+ * {@code LLMReasoning} breaking the {@link Reasoning} abstraction, and
+ * (c) made an unnecessary network/model call in production.
  */
 class StateMachineRunner {
 
@@ -44,6 +54,8 @@ class StateMachineRunner {
     private final EventSink        events;
     private final LivenessDetector liveness;
     private final TaintClassifier  taintClassifier;
+
+    private StreamListener streamListener; // nullable — streaming is opt-in
 
     /** Default constructor: creates one TaintClassifier per runner instance. */
     StateMachineRunner(PlanValidator validator, EventSink events) {
@@ -56,6 +68,10 @@ class StateMachineRunner {
         this.events          = events;
         this.liveness        = liveness;
         this.taintClassifier = taintClassifier;
+    }
+
+    void setStreamListener(StreamListener listener) {
+        this.streamListener = listener;
     }
 
     void run(Agent agent, ExecutionContext ctx) {
@@ -154,6 +170,21 @@ class StateMachineRunner {
 
                         if (!ctx.currentState().isTerminal())
                             ctx.transitionTo(RunState.VALIDATING);
+
+                        // Streaming fix: the FinalAnswer content is already
+                        // known — stream it directly without a second model
+                        // call. No cast to LLMReasoning, no script-pointer
+                        // side-effect on StubLLMProvider.
+                        if (streamListener != null && decision instanceof FinalAnswer fa) {
+                            try {
+                                fa.content().chars()
+                                    .mapToObj(c -> String.valueOf((char) c))
+                                    .forEach(token -> streamListener.onToken(ctx.runId(), token));
+                                streamListener.onComplete(ctx.runId(), fa);
+                            } catch (Throwable t) {
+                                streamListener.onError(ctx.runId(), t);
+                            }
+                        }
                     }
 
                     case ValidationResult.NeedsCorrection nc -> {

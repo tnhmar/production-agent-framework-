@@ -25,6 +25,12 @@ import java.util.concurrent.Executors;
  * This allows {@code AsyncAgentRuntime} (in package {@code com.agentframework.hitl})
  * to retain a reference to the live context after the run, enabling it to call
  * {@link DefaultExecutionContext#checkpoint()} to detect and persist HITL suspension.
+ *
+ * <p><b>Streaming</b>: {@link #execute(Agent, Task, StreamListener)} registers a
+ * {@link StreamListener} before running.  The {@link StateMachineRunner} emits
+ * token-level events once a {@link com.agentframework.foundation.FinalAnswer} is
+ * produced, without altering synchronous semantics for callers that do not supply
+ * a listener.
  */
 public class AgentRuntime {
 
@@ -69,6 +75,46 @@ public class AgentRuntime {
     }
 
     /**
+     * Synchronous execution with streaming support.
+     *
+     * <p>Registers the supplied {@link StreamListener} on the
+     * {@link StateMachineRunner} before the run starts.  Once the runner
+     * produces a {@link com.agentframework.foundation.FinalAnswer}, it performs
+     * a second, prose-only model call and emits tokens via
+     * {@link StreamListener#onToken}, followed by
+     * {@link StreamListener#onComplete}.  Exceptions from the streaming pass
+     * are caught and forwarded to {@link StreamListener#onError}.
+     *
+     * <p>The synchronous return value ({@link ExecutionResult}) is identical
+     * to the non-streaming {@link #execute(Agent, Task)} overload — streaming
+     * is purely additive.
+     *
+     * @param agent    the agent to execute
+     * @param task     the task to run
+     * @param listener receives token-level events during the streaming pass
+     * @return the {@link ExecutionResult} from the synchronous run
+     */
+    public ExecutionResult execute(Agent agent, Task task, StreamListener listener) {
+        return execute(agent, task, listener, SYSTEM_TENANT, "user");
+    }
+
+    /**
+     * Synchronous execution with streaming support and explicit tenant context.
+     *
+     * @param agent    the agent to execute
+     * @param task     the task to run
+     * @param listener receives token-level events during the streaming pass
+     * @param tenantId tenant context
+     * @param userId   user context
+     * @return the {@link ExecutionResult} from the synchronous run
+     */
+    public ExecutionResult execute(Agent agent, Task task, StreamListener listener,
+                                   String tenantId, String userId) {
+        DefaultExecutionContext ctx = new DefaultExecutionContext(task, tenantId, userId);
+        return executeWith(agent, ctx, listener);
+    }
+
+    /**
      * Drives the state machine into a <em>caller-supplied</em>
      * {@link DefaultExecutionContext}.
      *
@@ -86,9 +132,26 @@ public class AgentRuntime {
      * @return the {@link ExecutionResult} produced when the state machine exits
      */
     public ExecutionResult executeWith(Agent agent, DefaultExecutionContext ctx) {
+        return executeWith(agent, ctx, null);
+    }
+
+    /**
+     * Drives the state machine with an optional {@link StreamListener}.
+     *
+     * @param agent    the agent to execute
+     * @param ctx      execution context
+     * @param listener optional stream listener; {@code null} disables streaming
+     * @return the {@link ExecutionResult} produced when the state machine exits
+     */
+    public ExecutionResult executeWith(Agent agent, DefaultExecutionContext ctx,
+                                        StreamListener listener) {
         emit(ctx, AgentEvent.EventType.RUN_STARTED,
             Map.of("instruction", ctx.task().instruction()));
-        new StateMachineRunner(validator, events).run(agent, ctx);
+        StateMachineRunner runner = new StateMachineRunner(validator, events);
+        if (listener != null) {
+            runner.setStreamListener(listener);
+        }
+        runner.run(agent, ctx);
         emit(ctx, AgentEvent.EventType.RUN_COMPLETED,
             Map.of("state", ctx.currentState().name()));
         return ExecutionResult.from(ctx);

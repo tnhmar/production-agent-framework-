@@ -20,6 +20,14 @@ import com.agentframework.foundation.Observations;
  * {@code LLMReasoning} is now a pure delegator — it assembles the prompt and
  * calls the strategy; state-machine management belongs exclusively to
  * {@code StateMachineRunner}.
+ *
+ * <h3>Streaming fix — streamFinalAnswer removed</h3>
+ * <p>The previous {@code streamFinalAnswer()} method triggered a second
+ * {@code LLMProvider.generate()} call after a {@link com.agentframework.foundation.FinalAnswer}
+ * was already decided.  {@code StateMachineRunner} now streams
+ * {@code fa.content()} directly, so this method has been deleted to keep
+ * this class a pure delegator and avoid breaking the {@link Reasoning}
+ * abstraction with a cast.
  */
 public class LLMReasoning implements Reasoning {
 

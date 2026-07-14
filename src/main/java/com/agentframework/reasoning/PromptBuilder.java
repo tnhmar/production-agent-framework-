@@ -1,10 +1,13 @@
 package com.agentframework.reasoning;
+
 import com.agentframework.action.ToolRegistry;
 import com.agentframework.core.*;
 import com.agentframework.foundation.*;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+
 public class PromptBuilder {
     private final String systemPrompt;
     private final ToolRegistry registry;
@@ -17,6 +20,21 @@ public class PromptBuilder {
     public Prompt build(ExecutionContext ctx, Observations obs, ReasoningStrategy strategy) {
         List<Message> msgs = new ArrayList<>();
         msgs.add(new Message(Message.Role.SYSTEM, buildSystem(ctx, strategy)));
+        msgs.add(new Message(Message.Role.USER,   buildUser(ctx, obs)));
+        ctx.workingMemory().getByOrigin(Origin.TOOL).stream().reduce((a,b)->b)
+           .ifPresent(last -> msgs.add(new Message(Message.Role.TOOL_RESULT, last.content())));
+        return new Prompt(msgs, InferenceParameters.defaults().withMaxTokens(maxContextTokens));
+    }
+
+    /**
+     * Prose-only variant used for streaming final answers.
+     *
+     * <p>Omits the JSON output schema so the LLM can return plain text that
+     * is streamed directly to the caller.
+     */
+    public Prompt buildProseOnly(ExecutionContext ctx, Observations obs) {
+        List<Message> msgs = new ArrayList<>();
+        msgs.add(new Message(Message.Role.SYSTEM, buildSystemProseOnly(ctx)));
         msgs.add(new Message(Message.Role.USER,   buildUser(ctx, obs)));
         ctx.workingMemory().getByOrigin(Origin.TOOL).stream().reduce((a,b)->b)
            .ifPresent(last -> msgs.add(new Message(Message.Role.TOOL_RESULT, last.content())));
@@ -39,6 +57,19 @@ public class PromptBuilder {
         sb.append("\n").append(strategy.outputSchemaDescription());
         if (ctx.isPlanStale())
             sb.append("\n[WARNING] Previous plan invalidated: ").append(ctx.stalenessHint());
+        return sb.toString();
+    }
+
+    private String buildSystemProseOnly(ExecutionContext ctx) {
+        StringBuilder sb = new StringBuilder(systemPrompt).append("\n\n");
+        ctx.goalStack().current().ifPresent(g ->
+            sb.append("Goal: ").append(g.description()).append("\n"));
+        sb.append("Cycle: ").append(ctx.cycleCount())
+          .append(" | Tokens: ").append(ctx.totalTokensUsed())
+          .append(" / ").append(ctx.task().maxTokens()).append("\n\n");
+        if (ctx.isPlanStale())
+            sb.append("[WARNING] Previous plan invalidated: ").append(ctx.stalenessHint()).append("\n\n");
+        sb.append("Respond with the best possible final answer in plain text only. Do not wrap it in JSON or any schema.");
         return sb.toString();
     }
 
